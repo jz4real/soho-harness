@@ -16,6 +16,11 @@ export interface SkillLibraryRoots {
   readonly bundledRoot: string
 }
 
+export interface ManagedSkillRoots {
+  readonly userRoot: string
+  readonly disabledRoot: string
+}
+
 /** Read the two settings-facing roots without changing the agent's skill registry. */
 export async function listSkillLibrary(roots: SkillLibraryRoots): Promise<readonly SkillLibraryEntry[]> {
   const [user, bundled] = await Promise.all([
@@ -47,6 +52,23 @@ export async function importSkillFolder(sourceDirectory: string, userRoot: strin
     throw error
   }
   return { ...frontmatter, source: 'user', status: 'enabled', path: join(destination, 'SKILL.md') }
+}
+
+/** Move a managed skill into or out of the filesystem provider's discovery root. */
+export async function setSkillEnabled(name: string, roots: ManagedSkillRoots, enabled: boolean): Promise<void> {
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) throw new TypeError('skill name must be kebab-case')
+  const sourceRoot = enabled ? roots.disabledRoot : roots.userRoot
+  const destinationRoot = enabled ? roots.userRoot : roots.disabledRoot
+  const source = join(sourceRoot, name)
+  const destination = join(destinationRoot, name)
+  await mkdir(destinationRoot, { recursive: true })
+  try {
+    await stat(destination)
+    throw new Error(`skill "${name}" already exists at destination`)
+  } catch (error: unknown) {
+    if (!isMissing(error)) throw error
+  }
+  await rename(source, destination)
 }
 
 async function listRoot(

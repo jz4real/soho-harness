@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { importSkillFolder, listSkillLibrary } from '../src/index.ts'
+import { importSkillFolder, listSkillLibrary, setSkillEnabled } from '../src/index.ts'
 
 describe('listSkillLibrary', () => {
   it('separates a user skill from a bundled skill', async () => {
@@ -31,6 +31,18 @@ describe('listSkillLibrary', () => {
       source: 'user',
       status: 'enabled',
     })
+    await expect(listSkillLibrary({ userRoot, bundledRoot: join(root, 'bundled') })).resolves.toHaveLength(1)
+  })
+
+  it('moves a disabled skill out of the DSH discovery root and restores it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-skill-library-'))
+    const userRoot = join(root, 'skills')
+    const disabledRoot = join(root, 'skills-disabled')
+    await writeSkill(userRoot, 'meeting-proposal', 'Use when drafting a meeting proposal.')
+
+    await setSkillEnabled('meeting-proposal', { userRoot, disabledRoot }, false)
+    await expect(listSkillLibrary({ userRoot, bundledRoot: join(root, 'bundled') })).resolves.toEqual([])
+    await setSkillEnabled('meeting-proposal', { userRoot, disabledRoot }, true)
     await expect(listSkillLibrary({ userRoot, bundledRoot: join(root, 'bundled') })).resolves.toHaveLength(1)
   })
 })
