@@ -8,7 +8,7 @@ English | [中文](2026-08-26-skill-library.zh.md)
 
 **Architecture:** A host `skill-library` Remote service owns safe filesystem import and user-root state. A browser `ui-settings-skills` package contributes a separate Settings section and calls that service. The existing `ui-skill` source remains the only `/name` invocation path.
 
-**Tech Stack:** TypeScript, Cordis, Typert Remote services, React, CSS modules, Vitest, Playwright, fflate.
+**Tech Stack:** TypeScript, Cordis, Typert Remote services, React, CSS modules, Vitest, Playwright.
 
 **Spec:** [../specs/2026-08-26-skill-library-design.md](../specs/2026-08-26-skill-library-design.md)
 
@@ -32,31 +32,31 @@ English | [中文](2026-08-26-skill-library.zh.md)
 - [ ] Implement only the types, Remote decorators, and read-only list/inspect projection needed for those tests.
 - [ ] Run `pnpm vitest packages/host/skill-library/tests/skill-library.spec.ts` and commit `feat: add skill library catalog`.
 
-### Task 2: Implement safe folder and archive installation
+### Task 2: Implement safe folder installation
 
-**Files:** Modify `packages/host/skill-library/src/index.ts`; create `src/import.ts` and `tests/import.spec.ts`.
+**Files:** Modify `packages/host/skill-library/src/index.ts`; cover the flow in `tests/skill-library.spec.ts`.
 
-**Interfaces:** `validateBundle(root)` returns a parsed candidate or a typed rejection. `install(candidate, mode)` stages work in a temporary sibling directory and atomically renames it into `~/.dsh/skills/<name>`.
+**Interfaces:** `validateBundle(root)` returns a parsed candidate or a typed rejection. `installFolder(candidate, mode)` stages work in a temporary sibling directory and atomically renames it into `~/.dsh/skills/<name>`.
 
-- [ ] Write failing tests for a valid `SKILL.md`, malformed YAML, invalid name, nested bundle, traversal archive entry, escaping symlink, collision rejection, explicit replacement, and rollback after an injected rename failure.
-- [ ] Implement folder walking with realpath containment checks and archive expansion with `fflate`; accept exactly one top-level bundle containing `SKILL.md`.
-- [ ] Run `pnpm vitest packages/host/skill-library/tests/import.spec.ts` and commit `feat: import validated skill bundles`.
+- [ ] Write failing tests for a valid `SKILL.md`, malformed YAML, invalid name, nested bundle, symbolic link, collision rejection, explicit replacement, and rollback after an injected rename failure.
+- [ ] Implement safe folder walking; accept exactly one bundle directory containing `SKILL.md`, reject all symbolic links, and stage then atomically rename the copy.
+- [ ] Run `pnpm vitest packages/host/skill-library/tests/skill-library.spec.ts` and commit `feat: import validated skill bundles`.
 
 ### Task 3: Implement enable, disable, and removal
 
-**Files:** Modify `packages/host/skill-library/src/index.ts`; create `tests/lifecycle.spec.ts`.
+**Files:** Modify `packages/host/skill-library/src/index.ts`; cover the lifecycle in `tests/skill-library.spec.ts`.
 
 **Interfaces:** `setEnabled(name, false)` moves one managed bundle to `skills-disabled`; `setEnabled(name, true)` reverses the move; `remove(name)` deletes only a managed user or disabled bundle.
 
 - [ ] Write failing tests that assert disabled bundles leave the discovery root, survive a restart-shaped new gateway, and cannot mutate bundled entries.
 - [ ] Implement atomic moves, stale-target rejection, and typed read-only failures.
-- [ ] Run `pnpm vitest packages/host/skill-library/tests/lifecycle.spec.ts` and commit `feat: manage local skill lifecycle`.
+- [ ] Run `pnpm vitest packages/host/skill-library/tests/skill-library.spec.ts` and commit `feat: manage local skill lifecycle`.
 
 ### Task 4: Build the Settings Skills section
 
 **Files:** Create `packages/client/ui-settings-skills/{package.json,tsconfig.json,tsdown.config.ts,src/client/index.ts,src/client/SkillsSettingsSection.tsx,src/client/SkillLibraryTab.tsx,src/client/ImportSkillDialog.tsx,src/client/*.module.css,src/client/locales.ts,src/invariant.ts,tests/*.spec.tsx}`; modify `packages/bundle/web-app/{package.json,cordis.patch.yml}`.
 
-**Interfaces:** The client injects `settings.section` with id `skills`; it consumes `remote.skillLibrary` and exposes no Plugin Settings tabs. `ImportSkillDialog` accepts a host-selected directory or an archive file and requires an explicit replace action after a collision preview.
+**Interfaces:** The client injects `settings.section` with id `skills`; it consumes `remote.skillLibrary` and exposes no Plugin Settings tabs. `ImportSkillDialog` accepts a host-selected directory and requires an explicit replace action after a collision preview.
 
 - [ ] Write browser-component tests for navigation order, My skills/Built-in skills tabs, loading/error/empty states, search, read-only bundled cards, and focus after successful import.
 - [ ] Implement the localized Settings section, cards, details, enable/disable/remove controls, and import preview; retain accessible labels and keyboard behavior used by the existing Plugin Inventory tab.
@@ -66,7 +66,7 @@ English | [中文](2026-08-26-skill-library.zh.md)
 
 **Files:** Modify `packages/bundle/web-app/{package.json,cordis.patch.yml}` and the Remote aggregate files from Task 1; create or extend focused API and Web E2E tests under `packages/host/skill-library/tests` and `apps/web/tests`.
 
-**Interfaces:** Directory import uses the existing native directory picker. Archive import uses a bounded Web upload payload and the host `importArchive` Remote; the client never sends an absolute archive path to a remote host.
+**Interfaces:** Directory import uses the existing native directory picker and host `importFolder` Remote.
 
 - [ ] Write failing E2E coverage that imports `meeting-proposal`, sees it in My skills, disables it, verifies it leaves the `/` candidates, re-enables it, and verifies it returns.
 - [ ] Add the host and browser package rows to the Web bundle after their dependencies; wire the import controls to the named Remote methods.

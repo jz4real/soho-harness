@@ -8,7 +8,7 @@
 
 **架构：** host `skill-library` Remote 服务拥有安全的文件系统导入与用户根目录状态。browser `ui-settings-skills` 包贡献独立的 Settings 设置项并调用该服务。现有 `ui-skill` 来源仍是唯一的 `/name` 调用路径。
 
-**技术栈：** TypeScript、Cordis、Typert Remote services、React、CSS modules、Vitest、Playwright、fflate。
+**技术栈：** TypeScript、Cordis、Typert Remote services、React、CSS modules、Vitest、Playwright。
 
 **规格：** [../specs/2026-08-26-skill-library-design.zh.md](../specs/2026-08-26-skill-library-design.zh.md)
 
@@ -32,31 +32,31 @@
 - [ ] 只实现这些测试所需的类型、Remote decorators 及只读 `list/inspect` 投影。
 - [ ] 运行 `pnpm vitest packages/host/skill-library/tests/skill-library.spec.ts`，并提交 `feat: add skill library catalog`。
 
-### 任务 2：实现安全的文件夹和压缩包安装
+### 任务 2：实现安全的文件夹安装
 
-**文件：** 修改 `packages/host/skill-library/src/index.ts`；新建 `src/import.ts` 和 `tests/import.spec.ts`。
+**文件：** 修改 `packages/host/skill-library/src/index.ts`；在 `tests/skill-library.spec.ts` 覆盖该流程。
 
-**接口：** `validateBundle(root)` 返回已解析候选或带类型的拒绝。`install(candidate, mode)` 在临时同级目录暂存工作，再原子重命名到 `~/.dsh/skills/<name>`。
+**接口：** `validateBundle(root)` 返回已解析候选或带类型的拒绝。`installFolder(candidate, mode)` 在临时同级目录暂存工作，再原子重命名到 `~/.dsh/skills/<name>`。
 
-- [ ] 为有效 `SKILL.md`、格式错误 YAML、无效名称、嵌套 bundle、路径穿越压缩包条目、逃逸符号链接、冲突拒绝、显式替换以及注入的重命名失败回滚编写失败测试。
-- [ ] 使用 realpath 包含性检查实现文件夹遍历，使用 `fflate` 实现压缩包展开；只接受恰含一个顶层 bundle 且其中含 `SKILL.md` 的内容。
-- [ ] 运行 `pnpm vitest packages/host/skill-library/tests/import.spec.ts`，并提交 `feat: import validated skill bundles`。
+- [ ] 为有效 `SKILL.md`、格式错误 YAML、无效名称、嵌套 bundle、符号链接、冲突拒绝、显式替换以及注入的重命名失败回滚编写失败测试。
+- [ ] 实现安全的文件夹遍历；只接受包含 `SKILL.md` 的一个 bundle 目录，拒绝所有符号链接，并在暂存副本后原子重命名。
+- [ ] 运行 `pnpm vitest packages/host/skill-library/tests/skill-library.spec.ts`，并提交 `feat: import validated skill bundles`。
 
 ### 任务 3：实现启用、停用和删除
 
-**文件：** 修改 `packages/host/skill-library/src/index.ts`；新建 `tests/lifecycle.spec.ts`。
+**文件：** 修改 `packages/host/skill-library/src/index.ts`；在 `tests/skill-library.spec.ts` 覆盖生命周期。
 
 **接口：** `setEnabled(name, false)` 将一个托管 bundle 移到 `skills-disabled`；`setEnabled(name, true)` 反向移动；`remove(name)` 只删除托管用户或停用 bundle。
 
 - [ ] 编写失败测试，断言停用 bundle 离开发现根目录、在重启形态的新 gateway 中保留，且不能修改内置条目。
 - [ ] 实现原子移动、陈旧目标拒绝和带类型的只读失败。
-- [ ] 运行 `pnpm vitest packages/host/skill-library/tests/lifecycle.spec.ts`，并提交 `feat: manage local skill lifecycle`。
+- [ ] 运行 `pnpm vitest packages/host/skill-library/tests/skill-library.spec.ts`，并提交 `feat: manage local skill lifecycle`。
 
 ### 任务 4：构建 Settings Skills 设置项
 
 **文件：** 新建 `packages/client/ui-settings-skills/{package.json,tsconfig.json,tsdown.config.ts,src/client/index.ts,src/client/SkillsSettingsSection.tsx,src/client/SkillLibraryTab.tsx,src/client/ImportSkillDialog.tsx,src/client/*.module.css,src/client/locales.ts,src/invariant.ts,tests/*.spec.tsx}`；修改 `packages/bundle/web-app/{package.json,cordis.patch.yml}`。
 
-**接口：** client 注入 id 为 `skills` 的 `settings.section`；它消费 `remote.skillLibrary`，不暴露任何“插件”Settings 标签页。`ImportSkillDialog` 接受 host 选择的目录或压缩包文件，并在冲突预览后要求显式替换操作。
+**接口：** client 注入 id 为 `skills` 的 `settings.section`；它消费 `remote.skillLibrary`，不暴露任何“插件”Settings 标签页。`ImportSkillDialog` 接受 host 选择的目录，并在冲突预览后要求显式替换操作。
 
 - [ ] 为导航顺序、“我的技能/内置技能”标签页、加载/错误/空状态、搜索、只读内置卡片和成功导入后的焦点编写浏览器组件测试。
 - [ ] 实现本地化 Settings 设置项、卡片、详情、启用/停用/删除控件和导入预览；保留已有插件清单标签页使用的无障碍标签与键盘行为。
@@ -66,7 +66,7 @@
 
 **文件：** 修改 `packages/bundle/web-app/{package.json,cordis.patch.yml}` 与任务 1 中的 Remote 聚合文件；在 `packages/host/skill-library/tests` 和 `apps/web/tests` 下新建或扩展聚焦的 API 与 Web E2E 测试。
 
-**接口：** 文件夹导入使用现有原生目录选择器。压缩包导入使用受限的 Web 上传 payload 与 host `importArchive` Remote；client 绝不向远程 host 发送压缩包的绝对路径。
+**接口：** 文件夹导入使用现有原生目录选择器和 host `importFolder` Remote。
 
 - [ ] 编写失败 E2E 覆盖：导入 `meeting-proposal`、在“我的技能”看到它、停用它、验证它离开 `/` 候选、重新启用它并验证它返回。
 - [ ] 在依赖就绪后将 host 和 browser 包条目加入 Web bundle；将导入控件连接到已命名的 Remote 方法。
