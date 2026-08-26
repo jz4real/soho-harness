@@ -174,6 +174,9 @@ async function contentParts(
         nextImage.value += 1
         parts.push(...await imageParts(block, images, { message, image: nextImage.value }, parts.length > 0))
         break
+      case 'file':
+        // The following text block is the provider-visible local extraction.
+        break
       case 'tool-result':
         parts.push(...await contentParts(block.content, images, message, nextImage))
         break

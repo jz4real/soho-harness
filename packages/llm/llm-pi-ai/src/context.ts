@@ -65,6 +65,9 @@ async function userContent(
         })
         break
       }
+      case 'file':
+        // The following text block is the provider-visible local extraction.
+        break
       case 'tool-result':
         {
           const nested = await userContent(block.content, requestImages)

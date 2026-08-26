@@ -13,7 +13,8 @@ import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type { Agent, ModelSelection, ModelSelectionRef, AgentOptions, AgentStatus } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-presets/types'
 import { AttachmentError, admitEncodedImages } from '@deepseek-ai/dsh-attachment'
-import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import type { FileAttachmentRef, ImageAttachmentRef, SaveFileAttachment } from '@deepseek-ai/dsh-attachment'
+import { extractFileText } from '@deepseek-ai/dsh-attachment-local'
 import { createUserMessage, freezeMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { errorChain } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, MessageSource } from '@deepseek-ai/dsh-llm'
@@ -125,17 +126,77 @@ export const DEFAULT_COLD_BLANK_PROBE_MAX_BYTES = 1024
 /** Conversation message event types (the pagination counting unit). */
 const MESSAGE_TYPES = new Set(['user/message', 'assistant/message'])
 
-/** Validate one prompt as a batch before publishing any durable image object. */
+/** Maximum locally extracted file text admitted into one user message. */
+const MAX_MESSAGE_EXTRACTED_FILE_TEXT_CODE_POINTS = 160_000
+
+/** Return at most `limit` Unicode code points without splitting a surrogate pair. */
+function takeCodePoints(value: string, limit: number): { text: string; truncated: boolean; count: number } {
+  let count = 0
+  let end = 0
+  for (const point of value) {
+    if (count === limit) return { text: value.slice(0, end), truncated: true, count }
+    count += 1
+    end += point.length
+  }
+  return { text: value, truncated: false, count }
+}
+
+/** Model-visible local extraction paired with one durable file reference. */
+function extractedFileText(
+  ref: FileAttachmentRef,
+  extracted: Awaited<ReturnType<typeof extractFileText>>,
+  remaining: { codePoints: number },
+): string {
+  const name = ref.name ?? 'unnamed file'
+  if (extracted.status === 'unavailable') {
+    return `[File: ${name}]\n[Local text extraction unavailable; file contents were not read.]`
+  }
+  const admitted = takeCodePoints(extracted.text, remaining.codePoints)
+  remaining.codePoints -= admitted.count
+  const truncated = extracted.truncated || admitted.truncated
+  return `[File: ${name}]\n${admitted.text}${truncated ? '\n[Local text extraction truncated.]' : ''}`
+}
+
+/** Decode the browser wire form for generic-file storage and local extraction. */
+function decodedFile(part: Extract<PromptContentPart, { type: 'file' }>): SaveFileAttachment {
+  return {
+    data: new Uint8Array(Buffer.from(part.data, 'base64')),
+    mediaType: part.mediaType,
+    ...part.name === undefined ? {} : { name: part.name },
+  }
+}
+
+/** Admit binary prompt parts before constructing their ordered durable content. */
 async function durablePromptContent(ctx: Context, content: readonly PromptContentPart[]): Promise<ContentBlock[]> {
   if (content.every(part => part.type === 'text')) {
     return content.map(part => ({ type: 'text', text: part.text }))
   }
-  const refs = await admitEncodedImages(ctx.attachments, content.filter(part => part.type === 'image'))
-  let next = 0
-  return content.map(part => part.type === 'text'
-    ? { type: 'text', text: part.text }
-    // admitEncodedImages returns one reference per image part in order.
-    : { type: 'image', attachment: refs[next++] as ImageAttachmentRef })
+  const images = content.filter(part => part.type === 'image')
+  const imageRefs = images.length === 0 ? [] : await admitEncodedImages(ctx.attachments, images)
+  const fileInputs = content.filter((part): part is Extract<PromptContentPart, { type: 'file' }> => (
+    part.type === 'file'
+  )).map(decodedFile)
+  const fileRefs = fileInputs.length === 0 ? [] : await ctx.attachments.saveFiles(fileInputs)
+  const extractedFiles = await Promise.all(fileInputs.map(extractFileText))
+  const remaining = { codePoints: MAX_MESSAGE_EXTRACTED_FILE_TEXT_CODE_POINTS }
+  const durable: ContentBlock[] = []
+  let nextImage = 0
+  let nextFile = 0
+  for (const part of content) {
+    if (part.type === 'text') {
+      durable.push({ type: 'text', text: part.text })
+    } else if (part.type === 'image') {
+      // admitEncodedImages returns one reference per image part in order.
+      durable.push({ type: 'image', attachment: imageRefs[nextImage++] as ImageAttachmentRef })
+    } else {
+      const attachment = fileRefs[nextFile] as FileAttachmentRef
+      const extracted = extractedFiles[nextFile] as Awaited<ReturnType<typeof extractFileText>>
+      durable.push({ type: 'file', attachment })
+      durable.push({ type: 'text', text: extractedFileText(attachment, extracted, remaining) })
+      nextFile += 1
+    }
+  }
+  return durable
 }
 
 /** Search durable content for an image reference, including nested tool results. */

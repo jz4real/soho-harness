@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { AttachmentId, ImageVariantId } from '@deepseek-ai/dsh-attachment'
-import type { ImageAttachmentRef, ImageMediaType, RequestImageAttachment } from '@deepseek-ai/dsh-attachment'
+import type { FileAttachmentRef, ImageAttachmentRef, ImageMediaType, RequestImageAttachment } from '@deepseek-ai/dsh-attachment'
 import { createUserMessage, CallId, ReasoningEffortId, createMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
 import {
@@ -87,6 +87,29 @@ describe('serializeMessages', () => {
       }),
     ])
     expect(wire).toEqual([{ role: 'user', content: 'hello world' }])
+  })
+
+  it('omits durable file metadata and preserves its following extracted text exactly', () => {
+    const rawFileData = 'UkFXX0ZJTEVfQllURVNfTVVTVF9OT1RfUkVBQ0hfREVFUFNFRUs='
+    const attachment: FileAttachmentRef & { data: string } = {
+      attachmentId: AttachmentId(`sha256:${'e'.repeat(64)}`),
+      mediaType: 'text/csv',
+      bytes: 31,
+      name: 'private.csv',
+      data: rawFileData,
+    }
+    const extracted = '[File: private.csv]\ncity,total\nShanghai,42\n'
+
+    const wire = serializeMessages([createUserMessage({
+      content: [
+        { type: 'file', attachment },
+        { type: 'text', text: extracted },
+      ],
+      source: { kind: 'plugin', plugin: 'test' },
+    })])
+
+    expect(wire).toEqual([{ role: 'user', content: extracted }])
+    expect(JSON.stringify(wire)).not.toContain(rawFileData)
   })
 
   it('maps system-role messages in history', () => {
@@ -343,6 +366,40 @@ describe('serializeRequest', () => {
 })
 
 describe('image serialization', () => {
+  it('omits durable files while preserving their exact extracted text beside images', async () => {
+    const image = imageRef()
+    const rawFileData = 'UkFXX0ZJTEVfQllURVNfTVVTVF9OT1RfUkVBQ0hfREVFUFNFRUtfSU1BR0VfUEFUSA=='
+    const file: FileAttachmentRef & { data: string } = {
+      attachmentId: AttachmentId(`sha256:${'f'.repeat(64)}`),
+      mediaType: 'text/plain',
+      bytes: 12,
+      name: 'private.txt',
+      data: rawFileData,
+    }
+    const extracted = '[File: private.txt]\nlocal context'
+    const wire = await serializeRequestWithImages(request({
+      model: 'deepseek-v4-flash-vision-exp',
+      messages: [createUserMessage({
+        content: [
+          { type: 'file', attachment: file },
+          { type: 'text', text: extracted },
+          { type: 'image', attachment: image },
+        ],
+        source: { kind: 'plugin', plugin: 'test' },
+      })],
+    }), imageOptions([image]))
+
+    expect(wire.messages).toEqual([{
+      role: 'user',
+      content: [
+        { type: 'text', text: extracted },
+        { type: 'text', text: expect.stringContaining(`Image ${image.attachmentId}`) as string },
+        { type: 'file', file_id: 'file-api-image' },
+      ],
+    }])
+    expect(JSON.stringify(wire)).not.toContain(rawFileData)
+  })
+
   it.each([
     'image/png',
     'image/jpeg',

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { AttachmentId, ImageVariantId } from '@deepseek-ai/dsh-attachment'
 import type {
   AttachmentStore,
+  FileAttachmentRef,
   ImageAttachmentRef,
   ImageRequestPolicy,
   RequestImageAttachment,
@@ -71,6 +72,26 @@ describe('pi-ai request context conversion', () => {
     const base = { provider: 'openai', model: 'gpt-4.1', messages: [] }
     expect(toPiContext(base)).toEqual({ messages: [] })
     expect(toPiContext({ ...base, tools: [] })).toEqual({ messages: [] })
+  })
+
+  it('omits durable file metadata and preserves its following extracted text exactly', () => {
+    const rawFileData = 'UkFXX0ZJTEVfQllURVNfTVVTVF9OT1RfUkVBQ0hfUEk='
+    const attachment: FileAttachmentRef & { data: string } = {
+      attachmentId: AttachmentId(`sha256:${'e'.repeat(64)}`),
+      mediaType: 'text/plain',
+      bytes: 12,
+      name: 'private.txt',
+      data: rawFileData,
+    }
+    const extracted = '[File: private.txt]\nlocal context'
+
+    const context = toPiContext(request([user([
+      { type: 'file', attachment },
+      { type: 'text', text: extracted },
+    ])]))
+
+    expect(context.messages).toEqual([{ role: 'user', content: extracted, timestamp: 0 }])
+    expect(JSON.stringify(context)).not.toContain(rawFileData)
   })
 
   it('converts complete text-only history and rejects nested images without storage', () => {
@@ -172,6 +193,34 @@ describe('pi-ai request context conversion', () => {
         timestamp: 0,
       },
     ])
+  })
+
+  it('omits durable files while preserving their exact extracted text beside images', async () => {
+    const rawFileData = 'UkFXX0ZJTEVfQllURVNfTVVTVF9OT1RfUkVBQ0hfUElfSU1BR0VfUEFUSA=='
+    const file: FileAttachmentRef & { data: string } = {
+      attachmentId: AttachmentId(`sha256:${'f'.repeat(64)}`),
+      mediaType: 'text/plain',
+      bytes: 12,
+      name: 'private.txt',
+      data: rawFileData,
+    }
+    const extracted = '[File: private.txt]\nlocal context'
+    const context = await toPiContext(request([user([
+      { type: 'file', attachment: file },
+      { type: 'text', text: extracted },
+      { type: 'image', attachment: ref },
+    ])]), attachments)
+
+    expect(context.messages).toEqual([{
+      role: 'user',
+      content: [
+        { type: 'text', text: extracted },
+        { type: 'text', text: expect.stringContaining(`Image ${ref.attachmentId}`) as string },
+        { type: 'image', data: 'AQ==', mimeType: 'image/png' },
+      ],
+      timestamp: 0,
+    }])
+    expect(JSON.stringify(context)).not.toContain(rawFileData)
   })
 
   it('recursively converts nested tool-result text and images', async () => {
