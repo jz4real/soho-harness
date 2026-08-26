@@ -5,23 +5,43 @@ import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import type {
+  FileAttachmentLimits,
+  FileAttachmentRef,
   ImageAttachmentLimits,
   ImageAttachmentRef,
   ImageRequestPolicy,
   RequestImageAttachment,
+  SaveFileAttachment,
   SaveImageAttachment,
+  StoredFileAttachment,
   StoredImageAttachment,
 } from '@deepseek-ai/dsh-attachment'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import type { NormalizationPolicy } from './normalization.ts'
 import { CompressionLimiter } from './compression-limiter.ts'
-import { commitPreparedImageFile, prepareImageFile, readImageFile, validateImageFile } from './store.ts'
+import {
+  commitPreparedImageFile,
+  prepareImageFile,
+  readFileAttachment,
+  readImageFile,
+  saveFileAttachment,
+  validateImageFile,
+} from './store.ts'
 import { readRequestImageFile, requestImageVariantId } from './request-image.ts'
 
 export { canPassThroughNormalization, normalizeImage } from './normalization.ts'
 export type { NormalizedImage, NormalizationPolicy } from './normalization.ts'
-export { commitPreparedImageFile, prepareImageFile, readImageFile, saveImageFile, validateImageFile } from './store.ts'
+export {
+  commitPreparedImageFile,
+  prepareImageFile,
+  readFileAttachment,
+  readImageFile,
+  saveFileAttachment,
+  saveImageFile,
+  validateImageFile,
+} from './store.ts'
 export type { PreparedImageFile } from './store.ts'
+export { extractFileText, MAX_EXTRACTED_FILE_TEXT_CODE_POINTS } from './file-extract.ts'
 export { readRequestImageFile, requestImageDimensions, requestImageVariantId } from './request-image.ts'
 
 /** Default maximum encoded bytes for one submitted image; oversized sources are refused, not shrunk. */
@@ -46,6 +66,12 @@ export const DEFAULT_NORMALIZED_IMAGE_MAX_BYTES = 4 * 1024 * 1024
 export const DEFAULT_IMAGE_COMPRESSION_CONCURRENCY = 2
 /** Maximum configurable native image transformations per store. */
 export const MAX_IMAGE_COMPRESSION_CONCURRENCY = 8
+/** Default maximum original bytes for one submitted file. */
+export const DEFAULT_MAX_FILE_BYTES = 20 * 1024 * 1024
+/** Default maximum generic files in one prompt. */
+export const DEFAULT_MAX_FILES_PER_MESSAGE = 10
+/** Default maximum aggregate original-file bytes in one prompt. */
+export const DEFAULT_MAX_MESSAGE_FILE_BYTES = 50 * 1024 * 1024
 
 /** Local attachment backend configuration. */
 export interface Config {
@@ -67,6 +93,12 @@ export interface Config {
   normalizedImageMaxBytes?: number
   /** Maximum simultaneous normalization or request-image transformations in this service instance. */
   imageCompressionConcurrency?: number
+  /** Maximum original bytes accepted for one submitted file. Default: 20 MiB. */
+  maxFileBytes?: number
+  /** Maximum generic-file count accepted in one submitted message. Default: 10. */
+  maxFilesPerMessage?: number
+  /** Maximum aggregate original-file bytes accepted in one submitted message. Default: 50 MiB. */
+  maxMessageFileBytes?: number
 }
 
 function abortReason(signal: AbortSignal): Error {
@@ -143,11 +175,17 @@ export class LocalAttachmentStore extends AttachmentStore {
     normalizedImageMaxBytes: z.number().step(1).min(1).default(DEFAULT_NORMALIZED_IMAGE_MAX_BYTES),
     imageCompressionConcurrency: z.number().step(1).min(1).max(MAX_IMAGE_COMPRESSION_CONCURRENCY)
       .default(DEFAULT_IMAGE_COMPRESSION_CONCURRENCY),
+    maxFileBytes: z.number().step(1).min(1).default(DEFAULT_MAX_FILE_BYTES),
+    maxFilesPerMessage: z.number().step(1).min(1).default(DEFAULT_MAX_FILES_PER_MESSAGE),
+    maxMessageFileBytes: z.number().step(1).min(1).default(DEFAULT_MAX_MESSAGE_FILE_BYTES),
   })
 
   /** Absolute versioned storage root. */
   readonly root: string
+  /** Absolute versioned storage root for original generic files. */
+  readonly fileRoot: string
   readonly imageLimits: ImageAttachmentLimits
+  override readonly fileLimits: FileAttachmentLimits
   /** Resolved provider-independent normalization policy. */
   readonly normalizationPolicy: Readonly<NormalizationPolicy>
   /** Resolved instance-level compression limit. */
@@ -158,6 +196,7 @@ export class LocalAttachmentStore extends AttachmentStore {
   constructor(ctx: Context, config: Config) {
     super(ctx)
     this.root = resolve(join(resolveDshHome(config.dshHome), 'attachments', 'v1'))
+    this.fileRoot = resolve(join(resolveDshHome(config.dshHome), 'attachments', 'v2'))
     this.imageLimits = Object.freeze({
       maxImageBytes: config.maxImageBytes ?? DEFAULT_MAX_IMAGE_BYTES,
       maxImagesPerMessage: config.maxImagesPerMessage ?? DEFAULT_MAX_IMAGES_PER_MESSAGE,
@@ -165,6 +204,11 @@ export class LocalAttachmentStore extends AttachmentStore {
       maxImagePixels: config.maxImagePixels ?? DEFAULT_MAX_IMAGE_PIXELS,
       maxImageDimension: config.maxImageDimension ?? DEFAULT_MAX_IMAGE_DIMENSION,
       mediaTypes: Object.freeze(['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const),
+    })
+    this.fileLimits = Object.freeze({
+      maxFileBytes: config.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES,
+      maxFilesPerMessage: config.maxFilesPerMessage ?? DEFAULT_MAX_FILES_PER_MESSAGE,
+      maxMessageFileBytes: config.maxMessageFileBytes ?? DEFAULT_MAX_MESSAGE_FILE_BYTES,
     })
     this.normalizationPolicy = Object.freeze({
       maxDimension: config.normalizedImageMaxDimension ?? DEFAULT_NORMALIZED_IMAGE_MAX_DIMENSION,
@@ -205,6 +249,15 @@ export class LocalAttachmentStore extends AttachmentStore {
 
   async readImage(ref: ImageAttachmentRef, signal?: AbortSignal): Promise<StoredImageAttachment> {
     return readImageFile(this.root, ref, signal)
+  }
+
+  override async saveFile(input: SaveFileAttachment): Promise<FileAttachmentRef> {
+    this.validateFileBatch([input])
+    return saveFileAttachment(this.fileRoot, input)
+  }
+
+  override async readFile(ref: FileAttachmentRef, signal?: AbortSignal): Promise<StoredFileAttachment> {
+    return readFileAttachment(this.fileRoot, ref, signal)
   }
 
   override async readImageRequest(

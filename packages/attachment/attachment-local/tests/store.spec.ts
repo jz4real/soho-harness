@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import sharp from 'sharp'
 import type { ImageAttachmentLimits } from '@deepseek-ai/dsh-attachment'
 import type { NormalizationPolicy } from '../src/normalization.ts'
-import { commitPreparedImageFile, prepareImageFile, readImageFile, saveImageFile } from '../src/store.ts'
+import { commitPreparedImageFile, prepareImageFile, readFileAttachment, readImageFile, saveFileAttachment, saveImageFile } from '../src/store.ts'
 
 const fsControl = vi.hoisted(() => ({
   readSignals: [] as AbortSignal[],
@@ -74,6 +74,19 @@ afterEach(async () => {
 })
 
 describe('local attachment store', () => {
+  it('round-trips stored original file bytes and detects later corruption', async () => {
+    const storageRoot = join(await root(), '..', 'v2')
+    const data = Uint8Array.from([0, 1, 2, 255])
+    const ref = await saveFileAttachment(storageRoot, { data, name: 'C:\\private\\report.json', mediaType: 'application/json' })
+    const sha256 = String(ref.attachmentId).slice('sha256:'.length)
+    const object = join(storageRoot, 'files', sha256.slice(0, 2), sha256)
+
+    expect(ref).toMatchObject({ bytes: 4, name: 'report.json', mediaType: 'application/json' })
+    await expect(readFileAttachment(storageRoot, ref)).resolves.toEqual({ ref, data })
+    await writeFile(object, Uint8Array.of(3))
+    await expect(readFileAttachment(storageRoot, ref)).rejects.toMatchObject({ code: 'ATTACHMENT_CORRUPT' })
+  })
+
   it.skipIf(process.platform === 'win32')('syncs every object ancestor up to the durable boundary before returning', async () => {
     const storageRoot = await root()
     const base = join(storageRoot, '..', '..')

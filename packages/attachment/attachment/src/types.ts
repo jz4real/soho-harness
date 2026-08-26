@@ -67,6 +67,40 @@ export interface StoredImageAttachment {
   data: Uint8Array
 }
 
+/** Durable, serializable reference to one immutable original file. */
+export interface FileAttachmentRef {
+  /** Opaque storage identifier; never a filesystem path or bearer URL. */
+  attachmentId: AttachmentId
+  /** Caller-provided media type, or `application/octet-stream` when omitted. */
+  mediaType: string
+  /** Exact original byte length. */
+  bytes: number
+  /** Optional display name stripped of local path information. */
+  name?: string
+}
+
+/** Request to durably store one original file. */
+export interface SaveFileAttachment {
+  data: Uint8Array
+  /** Optional browser/provider media type; it is never interpreted as a path. */
+  mediaType?: string
+  /** Optional browser/provider display name; it is never interpreted as a path. */
+  name?: string
+}
+
+/** Stored original file bytes returned after reference and digest verification. */
+export interface StoredFileAttachment {
+  ref: FileAttachmentRef
+  data: Uint8Array
+}
+
+/** Deployment-resolved limits used by generic local-file admission. */
+export interface FileAttachmentLimits {
+  maxFileBytes: number
+  maxFilesPerMessage: number
+  maxMessageFileBytes: number
+}
+
 /** Deterministic request-image policy selected by one exact model route. */
 export interface ImageRequestPolicy {
   /** Maximum width multiplied by height after aspect-preserving projection. */

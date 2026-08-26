@@ -2,13 +2,16 @@
 
 import { createHash, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
-import { chmod, link, mkdir, open, readFile, unlink } from 'node:fs/promises'
+import { chmod, link, mkdir, open, readFile as readFsFile, unlink } from 'node:fs/promises'
 import { dirname, join, parse, resolve } from 'node:path'
 import {
   AttachmentError,
   AttachmentId,
 } from '@deepseek-ai/dsh-attachment'
 import type {
+  FileAttachmentRef,
+  SaveFileAttachment,
+  StoredFileAttachment,
   ImageAttachmentLimits,
   ImageAttachmentRef,
   SaveImageAttachment,
@@ -40,8 +43,8 @@ function objectPath(root: string, sha256: string): string {
   return join(root, 'objects', sha256.slice(0, 2), sha256)
 }
 
-function ensureReference(ref: ImageAttachmentRef): string {
-  const match = ID_PATTERN.exec(String(ref.attachmentId))
+function ensureReference(ref: { attachmentId: string }): string {
+  const match = ID_PATTERN.exec(ref.attachmentId)
   if (match?.[1] === undefined) throw new AttachmentError('Attachment reference is invalid.', 'INVALID_ATTACHMENT_REF')
   return match[1]
 }
@@ -212,7 +215,7 @@ export async function commitPreparedImageFile(
     } catch (error) {
       /* v8 ignore next -- Private same-filesystem directories make EEXIST the only recoverable link race. */
       if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error
-      const existing = new Uint8Array(await readFile(target))
+      const existing = new Uint8Array(await readFsFile(target))
       if (digest(existing) !== sha256) throw new AttachmentError('Stored attachment failed integrity verification.', 'ATTACHMENT_CORRUPT')
     }
     // Persist the target entry and close a concurrent bucket-creation window
@@ -275,7 +278,7 @@ export async function readImageFile(
   const sha256 = ensureReference(ref)
   let data: Uint8Array
   try {
-    data = new Uint8Array(await readFile(objectPath(root, sha256), { signal }))
+    data = new Uint8Array(await readFsFile(objectPath(root, sha256), { signal }))
   } catch (error) {
     signal?.throwIfAborted()
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') throw new AttachmentError('Attachment object is missing.', 'ATTACHMENT_NOT_FOUND')
@@ -291,6 +294,76 @@ export async function readImageFile(
   if (metadata.mediaType !== ref.mediaType || data.byteLength !== ref.bytes
     || metadata.width !== ref.width || metadata.height !== ref.height) {
     throw new AttachmentError('Stored attachment metadata does not match its reference.', 'ATTACHMENT_CORRUPT')
+  }
+  return { ref, data }
+}
+
+function fileObjectPath(root: string, sha256: string): string {
+  return join(root, 'files', sha256.slice(0, 2), sha256)
+}
+
+/** Persist original generic-file bytes under `attachments/v2/files`. */
+export async function saveFileAttachment(root: string, input: SaveFileAttachment): Promise<FileAttachmentRef> {
+  const sha256 = digest(input.data)
+  const name = displayName(input.name)
+  const ref: FileAttachmentRef = {
+    attachmentId: AttachmentId(`sha256:${sha256}`),
+    mediaType: input.mediaType?.trim() || 'application/octet-stream',
+    bytes: input.data.byteLength,
+    ...(name === undefined ? {} : { name }),
+  }
+  const bucket = join(root, 'files', sha256.slice(0, 2))
+  const staging = join(root, 'tmp')
+  const boundary = await ensureDurableHome(dirname(dirname(resolve(root))))
+  await ensureDurableDirectory(bucket, boundary)
+  await ensureDurableDirectory(staging, boundary)
+  const temporary = join(staging, randomUUID())
+  const target = fileObjectPath(root, sha256)
+  let handle
+  try {
+    handle = await open(temporary, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600)
+    await handle.writeFile(input.data)
+    await handle.sync()
+    await handle.close()
+    handle = undefined
+    try {
+      await link(temporary, target)
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error
+      const existing = new Uint8Array(await readFsFile(target))
+      if (digest(existing) !== sha256) throw new AttachmentError('Stored attachment failed integrity verification.', 'ATTACHMENT_CORRUPT')
+    }
+    await syncDirectory(bucket)
+    await syncDirectory(join(root, 'files'))
+    await unlink(temporary)
+  } catch (error) {
+    if (handle !== undefined) await handle.close().catch(() => {})
+    await unlink(temporary).catch(() => {})
+    if (error instanceof AttachmentError) throw error
+    throw new AttachmentError('Unable to persist file attachment.', 'ATTACHMENT_WRITE_FAILED', { cause: error })
+  }
+  return ref
+}
+
+/** Read original generic-file bytes and verify their content address and length. */
+export async function readFileAttachment(
+  root: string,
+  ref: FileAttachmentRef,
+  signal?: AbortSignal,
+): Promise<StoredFileAttachment> {
+  signal?.throwIfAborted()
+  const sha256 = ensureReference(ref)
+  let data: Uint8Array
+  try {
+    data = new Uint8Array(await readFsFile(fileObjectPath(root, sha256), { signal }))
+  } catch (error) {
+    signal?.throwIfAborted()
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') throw new AttachmentError('Attachment object is missing.', 'ATTACHMENT_NOT_FOUND')
+    throw new AttachmentError('Unable to read file attachment.', 'ATTACHMENT_READ_FAILED', { cause: error })
+  }
+  signal?.throwIfAborted()
+  if (digest(data) !== sha256 || data.byteLength !== ref.bytes) {
+    throw new AttachmentError('Stored attachment failed integrity verification.', 'ATTACHMENT_CORRUPT')
   }
   return { ref, data }
 }
