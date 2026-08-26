@@ -117,7 +117,7 @@ function genericAttachment(
   }
 }
 
-function props(overrides: Partial<ComposerAttachmentsOwnerProps> = {}): ComposerAttachmentsProps {
+function props(overrides: Partial<ComposerAttachmentsOwnerProps & Pick<ComposerAttachmentsProps, 't'>> = {}): ComposerAttachmentsProps {
   return {
     attachments: [],
     canAcceptDrop: true,
