@@ -62,6 +62,16 @@ class DecompressionBudget {
     this.remaining -= bytes
     return bytes
   }
+
+  limit(): number {
+    if (this.remaining === 0) throw new Error('Compressed file exceeds the local extraction budget.')
+    return this.remaining
+  }
+
+  consume(bytes: number): void {
+    if (bytes > this.remaining) throw new Error('Compressed file exceeds the local extraction budget.')
+    this.remaining -= bytes
+  }
 }
 
 function readUint16(data: Uint8Array, offset: number): number {
@@ -139,10 +149,54 @@ function unzipText(entry: ZipEntry, budget: DecompressionBudget): string {
   return decodeUtf8(data)
 }
 
+function assertWellFormedXml(xml: string): void {
+  const stack: string[] = []
+  let offset = 0
+  while (offset < xml.length) {
+    const start = xml.indexOf('<', offset)
+    if (start < 0) return
+    if (xml.startsWith('<!--', start)) {
+      const end = xml.indexOf('-->', start + 4)
+      if (end < 0) throw new Error('XML comment is not closed.')
+      offset = end + 3
+      continue
+    }
+    if (xml.startsWith('<![CDATA[', start)) {
+      const end = xml.indexOf(']]>', start + 9)
+      if (end < 0) throw new Error('XML CDATA section is not closed.')
+      offset = end + 3
+      continue
+    }
+    if (xml.startsWith('<?', start)) {
+      const end = xml.indexOf('?>', start + 2)
+      if (end < 0) throw new Error('XML processing instruction is not closed.')
+      offset = end + 2
+      continue
+    }
+    const end = xml.indexOf('>', start + 1)
+    if (end < 0) throw new Error('XML tag is not closed.')
+    const tag = xml.slice(start, end + 1)
+    const close = /^<\/([A-Za-z_][\w.:-]*)\s*>$/.exec(tag)
+    if (close !== null) {
+      if (stack.pop() !== close[1]) throw new Error('XML tags are not balanced.')
+    } else if (!/^<([A-Za-z_][\w.:-]*)(?:\s+[^<>]*)?\s*\/?>$/.test(tag)) {
+      throw new Error('XML start tag is invalid.')
+    } else if (!tag.endsWith('/>')) {
+      const name = /^<([A-Za-z_][\w.:-]*)/.exec(tag)?.[1]
+      if (name === undefined) throw new Error('XML start tag is invalid.')
+      stack.push(name)
+    }
+    offset = end + 1
+  }
+  if (stack.length > 0) throw new Error('XML tags are not balanced.')
+}
+
 function readOfficeEntry(entries: Map<string, ZipEntry>, name: string, budget: DecompressionBudget): string {
   const entry = entries.get(name)
   if (entry === undefined) throw new Error(`Office package entry ${name} is missing.`)
-  return unzipText(entry, budget)
+  const xml = unzipText(entry, budget)
+  assertWellFormedXml(xml)
+  return xml
 }
 
 function validateOfficePackage(
@@ -264,10 +318,9 @@ function extractPdf(data: Uint8Array): LimitedText {
     const dictionary = match[1] ?? ''
     const bytes = match[2] ?? ''
     if (!dictionary.includes('/FlateDecode')) continue
-    const maxOutputLength = budget.reserve(MAX_COMPRESSED_ENTRY_OUTPUT_BYTES)
-    appendPdfText(new TextDecoder('latin1').decode(inflateRawSync(Buffer.from(bytes, 'latin1'), {
-      maxOutputLength,
-    })), collector)
+    const inflated = new Uint8Array(inflateRawSync(Buffer.from(bytes, 'latin1'), { maxOutputLength: budget.limit() }))
+    budget.consume(inflated.byteLength)
+    appendPdfText(new TextDecoder('latin1').decode(inflated), collector)
     if (collector.truncated) break
   }
   if (!collector.hasVisibleText) throw new Error('PDF has no visible text.')

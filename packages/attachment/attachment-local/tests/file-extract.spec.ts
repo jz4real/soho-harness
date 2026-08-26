@@ -98,6 +98,39 @@ function pdf(text: string | undefined, startxrefDelta = 0): Uint8Array {
   return encoder.encode(source)
 }
 
+function joinBytes(parts: readonly Uint8Array[]): Uint8Array {
+  const data = new Uint8Array(parts.reduce((size, part) => size + part.byteLength, 0))
+  let offset = 0
+  for (const part of parts) {
+    data.set(part, offset)
+    offset += part.byteLength
+  }
+  return data
+}
+
+function compressedPdf(texts: readonly string[]): Uint8Array {
+  const streams = texts.map(text => new Uint8Array(deflateRawSync(encoder.encode(`BT (${text}) Tj ET`))))
+  const objects = [
+    encoder.encode('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n'),
+    encoder.encode('2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n'),
+    encoder.encode(`3 0 obj\n<< /Type /Page /Parent 2 0 R /Contents [${texts.map((_text, index) => `${index + 4} 0 R`).join(' ')}] >>\nendobj\n`),
+    ...streams.map((stream, index) => joinBytes([
+      encoder.encode(`${index + 4} 0 obj\n<< /Length ${stream.byteLength} /Filter /FlateDecode >>\nstream\n`),
+      stream,
+      encoder.encode('\nendstream\nendobj\n'),
+    ])),
+  ]
+  const header = encoder.encode('%PDF-1.4\n')
+  const offsets: number[] = []
+  let size = header.byteLength
+  for (const object of objects) {
+    offsets.push(size)
+    size += object.byteLength
+  }
+  const xref = encoder.encode(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(offset => `${String(offset).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Root 1 0 R >>\nstartxref\n${size}\n%%EOF`)
+  return joinBytes([header, ...objects, xref])
+}
+
 function replaceFirst(data: Uint8Array, from: string, to: string): Uint8Array {
   const needle = encoder.encode(from)
   const replacement = encoder.encode(to)
@@ -165,6 +198,11 @@ describe('local file text extraction', () => {
       .resolves.toEqual({ text: '', truncated: false, status: 'unavailable' })
   })
 
+  it('extracts text from multiple small Flate-compressed PDF streams within one budget', async () => {
+    await expect(extractFileText({ data: compressedPdf(['first ', 'second']), name: 'multi-stream.pdf' }))
+      .resolves.toEqual({ text: 'first second', truncated: false, status: 'ready' })
+  })
+
   it('limits extracted text by Unicode code point and reports truncation', async () => {
     const data = encoder.encode(`${'🙂'.repeat(MAX_EXTRACTED_FILE_TEXT_CODE_POINTS)}!`)
 
@@ -208,6 +246,26 @@ describe('local file text extraction', () => {
     const docx = zip({ 'word/document.xml': '<w:document><w:body><w:t>orphan</w:t></w:body></w:document>' })
 
     await expect(extractFileText({ data: docx, name: 'orphan.docx' }))
+      .resolves.toEqual({ text: '', truncated: false, status: 'unavailable' })
+  })
+
+  it('rejects CRC-valid DOCX and XLSX parts with malformed XML', async () => {
+    const docx = zip({
+      '[Content_Types].xml': DOCX_CONTENT_TYPES,
+      '_rels/.rels': '<Relationships><Relationship Type="officeDocument" Target="word/document.xml"/></Relationships>',
+      'word/document.xml': '<w:document><w:body><w:t>broken</w:t></w:body>',
+    })
+    const xlsx = zip({
+      '[Content_Types].xml': XLSX_CONTENT_TYPES,
+      '_rels/.rels': '<Relationships><Relationship Type="officeDocument" Target="xl/workbook.xml"/></Relationships>',
+      'xl/workbook.xml': '<workbook><sheets>',
+      'xl/sharedStrings.xml': '<sst><si><t>broken</t></si></sst>',
+      'xl/worksheets/sheet1.xml': '<worksheet/>',
+    })
+
+    await expect(extractFileText({ data: docx, name: 'malformed.docx' }))
+      .resolves.toEqual({ text: '', truncated: false, status: 'unavailable' })
+    await expect(extractFileText({ data: xlsx, name: 'malformed.xlsx' }))
       .resolves.toEqual({ text: '', truncated: false, status: 'unavailable' })
   })
 
