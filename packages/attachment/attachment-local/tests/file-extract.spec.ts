@@ -270,6 +270,21 @@ describe('local file text extraction', () => {
   })
 
   it.each([
+    ['unescaped ampersand', '<w:document><w:body><w:t>bad & text</w:t></w:body></w:document>'],
+    ['undeclared entity', '<w:document><w:body><w:t>bad &unknown; text</w:t></w:body></w:document>'],
+    ['unquoted attribute', '<w:document><w:body><w:t xml:space=preserve>bad text</w:t></w:body></w:document>'],
+  ])('rejects CRC-valid DOCX XML with an %s', async (_kind, documentXml) => {
+    const docx = zip({
+      '[Content_Types].xml': DOCX_CONTENT_TYPES,
+      '_rels/.rels': '<Relationships><Relationship Type="officeDocument" Target="word/document.xml"/></Relationships>',
+      'word/document.xml': documentXml,
+    })
+
+    await expect(extractFileText({ data: docx, name: 'malformed.docx' }))
+      .resolves.toEqual({ text: '', truncated: false, status: 'unavailable' })
+  })
+
+  it.each([
     ['office', Uint8Array.of(0x50, 0x4b, 0x03, 0x04), 'broken.docx'],
     ['PDF', encoder.encode('%PDF-1.4\n1 0 obj\nthis is corrupt\nendobj\n%%EOF'), 'broken.pdf'],
   ])('reports unavailable for corrupt %s data', async (_kind, data, name) => {

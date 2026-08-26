@@ -2,6 +2,7 @@
 
 import { inflateRawSync } from 'node:zlib'
 import type { SaveFileAttachment } from '@deepseek-ai/dsh-attachment'
+import { SaxesParser } from 'saxes'
 
 /** Maximum Unicode code points returned for one extracted file. */
 export const MAX_EXTRACTED_FILE_TEXT_CODE_POINTS = 60_000
@@ -150,45 +151,7 @@ function unzipText(entry: ZipEntry, budget: DecompressionBudget): string {
 }
 
 function assertWellFormedXml(xml: string): void {
-  const stack: string[] = []
-  let offset = 0
-  while (offset < xml.length) {
-    const start = xml.indexOf('<', offset)
-    if (start < 0) return
-    if (xml.startsWith('<!--', start)) {
-      const end = xml.indexOf('-->', start + 4)
-      if (end < 0) throw new Error('XML comment is not closed.')
-      offset = end + 3
-      continue
-    }
-    if (xml.startsWith('<![CDATA[', start)) {
-      const end = xml.indexOf(']]>', start + 9)
-      if (end < 0) throw new Error('XML CDATA section is not closed.')
-      offset = end + 3
-      continue
-    }
-    if (xml.startsWith('<?', start)) {
-      const end = xml.indexOf('?>', start + 2)
-      if (end < 0) throw new Error('XML processing instruction is not closed.')
-      offset = end + 2
-      continue
-    }
-    const end = xml.indexOf('>', start + 1)
-    if (end < 0) throw new Error('XML tag is not closed.')
-    const tag = xml.slice(start, end + 1)
-    const close = /^<\/([A-Za-z_][\w.:-]*)\s*>$/.exec(tag)
-    if (close !== null) {
-      if (stack.pop() !== close[1]) throw new Error('XML tags are not balanced.')
-    } else if (!/^<([A-Za-z_][\w.:-]*)(?:\s+[^<>]*)?\s*\/?>$/.test(tag)) {
-      throw new Error('XML start tag is invalid.')
-    } else if (!tag.endsWith('/>')) {
-      const name = /^<([A-Za-z_][\w.:-]*)/.exec(tag)?.[1]
-      if (name === undefined) throw new Error('XML start tag is invalid.')
-      stack.push(name)
-    }
-    offset = end + 1
-  }
-  if (stack.length > 0) throw new Error('XML tags are not balanced.')
+  new SaxesParser().write(xml).close()
 }
 
 function readOfficeEntry(entries: Map<string, ZipEntry>, name: string, budget: DecompressionBudget): string {
