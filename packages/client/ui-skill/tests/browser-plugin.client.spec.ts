@@ -293,6 +293,24 @@ describe('catalog cache', () => {
     await source.candidates(proj('s2'), req(''))
     expect(payloads).toHaveLength(4)
   })
+
+  it('skills/change clears every cached session so newly imported skills appear', async () => {
+    const initial: SkillRow[] = [{ name: 'docx', description: 'write documents', modelInvocable: true }]
+    const refreshed: SkillRow[] = [...initial, { name: 'pptx', description: 'create slides', modelInvocable: true }]
+    let catalog = initial
+    const payloads: object[] = []
+    const { ctx, source } = await bench((payload) => {
+      payloads.push(payload)
+      return listOk(catalog)(payload)
+    })
+    await expect(source.candidates(proj('s1'), req('p'))).resolves.toEqual([])
+    catalog = refreshed
+    ctx.remote.$dispatch('skills/change', [])
+    await expect(source.candidates(proj('s1'), req('p'))).resolves.toEqual([
+      { name: 'pptx', description: 'create slides' },
+    ])
+    expect(payloads).toHaveLength(2)
+  })
 })
 
 describe('lexicon', () => {
