@@ -31,6 +31,7 @@ const t = ((key: string, params?: Readonly<Record<string, unknown>>): string => 
     'image.scrollRight': '向右滚动图片',
     'image.dropBlocked': '当前无法添加图片',
     'image.dropTitle': '图片拖动到此处即可添加',
+    'input.send': '发送消息',
   }
   if (key === 'image.remove') {
     const name = params?.name
@@ -44,6 +45,15 @@ const t = ((key: string, params?: Readonly<Record<string, unknown>>): string => 
   return messages[key] ?? key
 }) as ComposerAttachmentsProps['t']
 
+const enT = ((key: string): string => ({
+  'input.send': 'Send message',
+  'image.pending': 'Pending images',
+  'image.openOriginal': 'View original',
+  'image.scrollLeft': 'Scroll images left',
+  'image.scrollRight': 'Scroll images right',
+  'image.dropDesc': 'Image limits',
+}[key] ?? key)) as ComposerAttachmentsProps['t']
+
 function attachment(id: string, name = `${id}.png`): ComposerAttachment {
   return {
     kind: 'image',
@@ -53,12 +63,25 @@ function attachment(id: string, name = `${id}.png`): ComposerAttachment {
   }
 }
 
+function genericAttachment(
+  id: string,
+  name = `${id}.csv`,
+  contents = 'name,score\nAda,10',
+): ComposerAttachment {
+  return {
+    kind: 'file',
+    id: id as ComposerAttachment['id'],
+    file: new File([contents], name, { type: 'text/csv' }),
+    fileType: 'csv',
+  }
+}
+
 function props(overrides: Partial<ComposerAttachmentsOwnerProps> = {}): ComposerAttachmentsProps {
   return {
     attachments: [],
     canAcceptDrop: true,
-    onAddImages: () => {},
-    onRemoveImage: () => {},
+    onAddAttachments: () => {},
+    onRemoveAttachment: () => {},
     t,
     ...overrides,
   } as unknown as ComposerAttachmentsProps
@@ -66,9 +89,9 @@ function props(overrides: Partial<ComposerAttachmentsOwnerProps> = {}): Composer
 
 describe('ComposerAttachments', () => {
   it('accepts file drops anywhere on the document and keeps non-file drags native', () => {
-    const onAddImages = vi.fn()
+    const onAddAttachments = vi.fn()
     const view = render(<ComposerAttachments {...props({
-      onAddImages,
+      onAddAttachments,
       dropLimits: { count: 20, size: '5MB' },
     })} />)
 
@@ -82,12 +105,12 @@ describe('ComposerAttachments', () => {
     const image = attachment('dropped').file
     const dataTransfer = { types: ['Files'], files: [image], dropEffect: 'none' }
     expect(fireEvent.dragEnter(document.body, { dataTransfer })).toBe(false)
-    expect(view.getByRole('status').textContent).toContain('图片拖动到此处即可添加')
+    expect(view.getByRole('status').textContent).toContain('文件或图片拖动到此处即可添加')
     expect(view.getByRole('status').textContent).toContain('最多 20 张，每张 5MB')
     expect(fireEvent.dragOver(document.body, { dataTransfer })).toBe(false)
     expect(dataTransfer.dropEffect).toBe('copy')
     expect(fireEvent.drop(document.body, { dataTransfer })).toBe(false)
-    expect(onAddImages).toHaveBeenCalledWith([image])
+    expect(onAddAttachments).toHaveBeenCalledWith([image])
     expect(view.queryByRole('status')).toBeNull()
   })
 
@@ -118,30 +141,30 @@ describe('ComposerAttachments', () => {
   })
 
   it('shows a blocked drop without forwarding its files', () => {
-    const onAddImages = vi.fn()
-    const view = render(<ComposerAttachments {...props({ canAcceptDrop: false, onAddImages })} />)
+    const onAddAttachments = vi.fn()
+    const view = render(<ComposerAttachments {...props({ canAcceptDrop: false, onAddAttachments })} />)
     const image = attachment('blocked').file
     const dataTransfer = { types: ['Files'], files: [image], dropEffect: 'copy' }
     fireEvent.dragEnter(document.body, { dataTransfer })
-    expect(view.getByRole('status').textContent).toBe('当前无法添加图片')
+    expect(view.getByRole('status').textContent).toBe('当前无法添加附件')
     fireEvent.dragOver(document.body, { dataTransfer })
     expect(dataTransfer.dropEffect).toBe('none')
     fireEvent.drop(document.body, { dataTransfer })
-    expect(onAddImages).not.toHaveBeenCalled()
+    expect(onAddAttachments).not.toHaveBeenCalled()
     expect(view.queryByRole('status')).toBeNull()
   })
 
   it('routes rail removal and closes previews on Escape or attachment removal', () => {
-    const onRemoveImage = vi.fn()
+    const onRemoveAttachment = vi.fn()
     const image = attachment('draft-1', 'pixel.png')
-    const initial = props({ attachments: [image], onRemoveImage })
+    const initial = props({ attachments: [image], onRemoveAttachment })
     const view = render(<ComposerAttachments {...initial} />)
 
     fireEvent.click(view.getByRole('button', { name: '移除图片 pixel.png' }))
-    expect(onRemoveImage).toHaveBeenCalledWith(image.id)
+    expect(onRemoveAttachment).toHaveBeenCalledWith(image.id)
     fireEvent.click(view.getByTitle('查看原图'))
     expect(view.getByRole('dialog', { name: '原图预览' })).toBeTruthy()
-    view.rerender(<ComposerAttachments {...props({ attachments: [], onRemoveImage })} />)
+    view.rerender(<ComposerAttachments {...props({ attachments: [], onRemoveAttachment })} />)
     expect(view.queryByRole('dialog', { name: '原图预览' })).toBeNull()
 
     view.rerender(<ComposerAttachments {...initial} />)
@@ -156,5 +179,66 @@ describe('ComposerAttachments', () => {
     expect(view.getByAltText('待发送图片')).toBeTruthy()
     fireEvent.click(view.getByTitle('查看原图'))
     expect(view.getByAltText('原图')).toBeTruthy()
+  })
+
+  it('renders a generic file as a labeled ready-to-send card', () => {
+    const file = genericAttachment('csv', 'scores.csv', '1234567890')
+    const view = render(<ComposerAttachments {...props({ attachments: [file] })} />)
+
+    expect(view.getByText('CSV')).toBeTruthy()
+    expect(view.getByText('scores.csv')).toBeTruthy()
+    expect(view.getByText('10 B')).toBeTruthy()
+    expect(view.getByText('已准备发送')).toBeTruthy()
+    expect(view.getByRole('button', { name: '移除文件 scores.csv' })).toBeTruthy()
+    expect(view.queryByRole('button', { name: '查看原图' })).toBeNull()
+  })
+
+  it('routes dropped generic files and card removal through the unified attachment callbacks', () => {
+    const onAddAttachments = vi.fn()
+    const onRemoveAttachment = vi.fn()
+    const file = genericAttachment('report', 'report.csv')
+    const view = render(<ComposerAttachments {...props({
+      attachments: [file], onAddAttachments, onRemoveAttachment,
+    })} />)
+    const dataTransfer = { types: ['Files'], files: [file.file], dropEffect: 'none' }
+
+    fireEvent.dragEnter(document.body, { dataTransfer })
+    fireEvent.drop(document.body, { dataTransfer })
+    expect(onAddAttachments).toHaveBeenCalledWith([file.file])
+
+    fireEvent.click(view.getByRole('button', { name: '移除文件 report.csv' }))
+    expect(onRemoveAttachment).toHaveBeenCalledWith(file.id)
+  })
+
+  it('groups multiple file cards for the responsive two-to-one-column layout', () => {
+    const one = genericAttachment('one')
+    const two = genericAttachment('two')
+    Object.defineProperty(one.file, 'size', { value: 1024 })
+    Object.defineProperty(two.file, 'size', { value: 1536 })
+    const view = render(<ComposerAttachments {...props({
+      attachments: [one, two],
+    })} />)
+    expect(view.getByRole('list', { name: '待发送文件' })).toBeTruthy()
+    expect(view.getAllByRole('listitem')).toHaveLength(2)
+    expect(view.getByText('1 KB')).toBeTruthy()
+    expect(view.getByText('1.5 KB')).toBeTruthy()
+  })
+
+  it('localizes file-card and drop affordances in English', () => {
+    const file = genericAttachment('unnamed', '')
+    Object.defineProperty(file.file, 'size', { value: 1024 * 1024 })
+    const view = render(<ComposerAttachments {...props({ attachments: [file], t: enT })} />)
+
+    expect(view.getByRole('list', { name: 'Files ready to send' })).toBeTruthy()
+    expect(view.getByText('Unnamed file')).toBeTruthy()
+    expect(view.getByText('1 MB')).toBeTruthy()
+    expect(view.getByText('Ready to send')).toBeTruthy()
+    expect(view.getByRole('button', { name: 'Remove file Unnamed file' })).toBeTruthy()
+
+    const dataTransfer = { types: ['Files'], files: [file.file], dropEffect: 'none' }
+    fireEvent.dragEnter(document.body, { dataTransfer })
+    expect(view.getByRole('status').textContent).toContain('Drop files or images here to add them')
+    view.rerender(<ComposerAttachments {...props({ attachments: [file], canAcceptDrop: false, t: enT })} />)
+    expect(view.getByRole('status').textContent).toBe('Attachments cannot be added right now')
   })
 })

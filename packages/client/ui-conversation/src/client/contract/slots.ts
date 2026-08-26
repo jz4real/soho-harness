@@ -22,24 +22,39 @@ import type { ComposerSubmitGesture, InputSubmitMode } from './composer-submissi
 import type { ChatNode, ChatNodeKind } from './chat-nodes.ts'
 import type { CallId, SelectionTarget, ViewTab } from './views.ts'
 
+/** Generic file formats admitted by the composer and local extractor. */
+export type ComposerFileType = 'csv' | 'xlsx' | 'docx' | 'pdf' | 'txt' | 'markdown' | 'json'
+
 /** Browser-owned image that has not crossed the durable host boundary. */
-export interface ComposerAttachment {
+export interface ComposerImageAttachment {
   kind: 'image'
   id: DraftAttachmentId
   file: File
   previewUrl: string
 }
 
+/** Browser-owned generic file that has not crossed the durable host boundary. */
+export interface ComposerFileAttachment {
+  kind: 'file'
+  id: DraftAttachmentId
+  file: File
+  /** Validated display/extraction family derived from its declared type or filename. */
+  fileType: ComposerFileType
+}
+
+/** Ordered browser-owned draft attachment. */
+export type ComposerAttachment = ComposerImageAttachment | ComposerFileAttachment
+
 /** Input state handed to the optional attachment presentation plugin. */
 export interface ComposerAttachmentsOwnerProps {
-  /** Browser-owned draft images in input order. */
+  /** Browser-owned draft images and files in input order. */
   attachments: readonly ComposerAttachment[]
-  /** Whether a document-level file drop may add images now. */
+  /** Whether a document-level file drop may add attachments now. */
   canAcceptDrop: boolean
   /** Add one dropped batch through the composer's validation path. */
-  onAddImages: (files: readonly File[]) => void
-  /** Remove one draft image through the conversation service. */
-  onRemoveImage: (id: DraftAttachmentId) => void
+  onAddAttachments: (files: readonly File[]) => void
+  /** Remove one draft attachment through the conversation service. */
+  onRemoveAttachment: (id: DraftAttachmentId) => void
   /** Display-ready limits for the drop invitation. */
   dropLimits?: { readonly count: number; readonly size: string } | undefined
 }
@@ -243,7 +258,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      * command face through its own inject.
      */
     'conversation.composer.bar': { kind: 'single'; scope: 'session-maybe'; owner: ComposerBarOwnerProps }
-    /** Optional draft-image rail, drop target, and preview surface inside the composer. */
+    /** Optional draft attachment cards, drop target, and image-preview surface inside the composer. */
     'conversation.input.attachments': {
       kind: 'single'
       scope: 'session-maybe'
@@ -553,11 +568,11 @@ export interface ComposerBarOwnerProps {
 export interface ComposerBarInjected {
   /** The InputBar-exclusive keyboard/DOM command face (private plane); absent with the session. */
   keyboard: ComposerKeyboard | undefined
-  /** Create previews and append image ids to the session input. */
+  /** Create draft descriptors and append attachment ids to the session input. */
   addImages: ((files: readonly File[]) => string | null) | undefined
-  /** Release one preview and remove its id from session input. */
+  /** Release one draft attachment and remove its id from session input. */
   removeImage: ((id: DraftAttachmentId) => void) | undefined
-  /** Resolve ordered input ids to browser-owned draft images. */
+  /** Resolve ordered input ids to browser-owned draft attachments. */
   draftImages: ((ids: readonly DraftAttachmentId[]) => readonly ComposerAttachment[]) | undefined
   /** Resolve one keyboard submission gesture against the current running state and persisted preference. */
   resolveSubmitMode: (

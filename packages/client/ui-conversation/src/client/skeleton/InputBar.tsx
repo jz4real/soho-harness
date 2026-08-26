@@ -20,7 +20,7 @@ import type {} from '@deepseek-ai/dsh-goal/client'
 // The `imageLimits` projection key merge (intake pre-check) arrives with the
 // wire types: apiproxy's sessions contract declares it, and client-runtime's
 // api-remotes import already places it in every client program.
-import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
+import type { Translate, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ComposerBarProps } from '../contract/slots.ts'
 import { deriveDecorations } from '../input/decorations.ts'
 import type { DraftDecorations } from '../input/decorations.ts'
@@ -34,6 +34,37 @@ import css from './InputBar.module.css'
 
 /** Decoration product of the no-session state (no machine, empty draft). */
 const INERT_DECORATIONS: DraftDecorations = { token: null, chips: [], textRefs: [], hint: null }
+
+const ATTACHMENT_ACCEPT = [
+  '.csv', '.xlsx', '.docx', '.pdf', '.txt', '.md', '.markdown', '.json',
+  'image/png', 'image/jpeg', 'image/webp', 'image/gif',
+].join(',')
+
+const IMAGE_MEDIA_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+const FILE_MEDIA_TYPES = new Set([
+  'text/csv', 'application/csv',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/pdf', 'text/plain', 'text/markdown', 'text/x-markdown', 'application/json', 'text/json',
+])
+const FILE_EXTENSIONS = new Set(['csv', 'xlsx', 'docx', 'pdf', 'txt', 'md', 'markdown', 'json'])
+const MAX_FILE_BYTES = 20 * 1024 * 1024
+const MAX_FILES_PER_MESSAGE = 10
+const MAX_MESSAGE_FILE_BYTES = 50 * 1024 * 1024
+
+function attachmentKind(file: File): 'image' | 'file' | undefined {
+  if (IMAGE_MEDIA_TYPES.has(file.type.toLowerCase())) return 'image'
+  const extension = file.name.match(/\.([^.]+)$/u)?.[1]?.toLowerCase()
+  if (FILE_MEDIA_TYPES.has(file.type.toLowerCase()) || (extension !== undefined && FILE_EXTENSIONS.has(extension))) {
+    return 'file'
+  }
+  return undefined
+}
+
+/** Resolve attachment copy through the current conversation locale. */
+function attachmentText(t: TranslateNS<'conversation'>, zhText: string, enText: string): string {
+  return t('input.send') === 'Send message' ? enText : zhText
+}
 
 /** The selection and edit family a `beforeinput` recorded, with the draft length it applied to. */
 interface PendingEdit {
@@ -106,7 +137,7 @@ export function InputBar({
     [draftImages, input?.imageIds],
   )
   const empty = draft.trim() === '' && attachments.length === 0
-  // Transient error banner (machine notices, image-intake rejections, and
+  // Transient error banner (machine notices, attachment-intake rejections, and
   // prompt failures): the seq keys the Toast so an identical repeated message
   // restarts the hold-then-fade cycle instead of reusing the faded one.
   const [toast, setToast] = useState<{ seq: number; text: string } | null>(null)
@@ -136,6 +167,7 @@ export function InputBar({
     if (notice?.level === 'error') showToast(notice.text)
   }, [notice, showToast])
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
   const cardRef = useRef<HTMLDivElement | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const mirrorRef = useRef<HTMLDivElement | null>(null)
@@ -483,7 +515,7 @@ export function InputBar({
       .filter(item => item.kind === 'file')
       .map(item => item.getAsFile())
       .filter((file): file is File => file !== null)
-    if (files.length > 0) intakeImages(files)
+    if (files.length > 0) intakeAttachments(files)
     const text = e.clipboardData.getData('text/plain')
     if (text === '') {
       if (files.length > 0) e.preventDefault()
@@ -502,32 +534,59 @@ export function InputBar({
     keyboard.track(keyboard.snapshot.draft, caret)
   }
 
-  // Intake pre-check (DeepSeek Chat semantics): an addition that would break
+  // Intake pre-check: an addition that would break
   // a projected limit is refused as a whole batch, announced immediately, and
   // never enters the rail — no more submit-time failure rolling the rail
   // back. The host enforces the same limits at submit for callers that bypass
   // this composer.
-  const intakeImages = useCallback((files: readonly File[]): void => {
+  const intakeAttachments = useCallback((files: readonly File[]): void => {
     if (addImages === undefined || files.length === 0) return
+    const kinds = files.map(attachmentKind)
+    if (kinds.some(kind => kind === undefined)) {
+      showToast(attachmentText(
+        t,
+        '仅支持 CSV、XLSX、DOCX、PDF、TXT、Markdown、JSON 和图片',
+        'Only CSV, XLSX, DOCX, PDF, TXT, Markdown, JSON, and images are supported',
+      ))
+      return
+    }
     const rejected = ((): string | null => {
+      const images = files.filter((_, index) => kinds[index] === 'image')
+      const genericFiles = files.filter((_, index) => kinds[index] === 'file')
       if (imageLimits !== undefined) {
-        // Format precedes limits (DeepSeek Chat's filter order): a batch with
-        // a non-image must announce the format problem, not a count or size
-        // it could never pass anyway — addImages rejects it authoritatively.
-        if (files.some(file => !(imageLimits.mediaTypes as readonly string[]).includes(file.type))) {
-          return addImages(files)
+        // The Host image policy may be narrower than the browser-supported
+        // set; apply it only to the image members of a mixed batch.
+        if (images.some(file => !(imageLimits.mediaTypes as readonly string[]).includes(file.type))) {
+          return t('image.unsupportedType')
         }
-        if (attachments.length + files.length > imageLimits.maxImagesPerMessage) {
+        const attachedImages = attachments.filter(attachment => attachment.kind === 'image')
+        if (attachedImages.length + images.length > imageLimits.maxImagesPerMessage) {
           return t('image.tooMany', { count: imageLimits.maxImagesPerMessage })
         }
-        if (files.some(file => file.size > imageLimits.maxImageBytes)) {
+        if (images.some(file => file.size > imageLimits.maxImageBytes)) {
           return t('image.fileTooLarge', { size: imageSizeText(imageLimits.maxImageBytes) })
         }
-        const total = attachments.reduce((sum, attachment) => sum + attachment.file.size, 0)
-          + files.reduce((sum, file) => sum + file.size, 0)
+        const total = attachedImages.reduce((sum, attachment) => sum + attachment.file.size, 0)
+          + images.reduce((sum, file) => sum + file.size, 0)
         if (total > imageLimits.maxMessageImageBytes) {
           return t('image.totalTooLarge', { size: imageSizeText(imageLimits.maxMessageImageBytes) })
         }
+      }
+      const attachedFiles = attachments.filter(attachment => attachment.kind === 'file')
+      if (attachedFiles.length + genericFiles.length > MAX_FILES_PER_MESSAGE) {
+        return attachmentText(
+          t,
+          `一条消息最多添加 ${String(MAX_FILES_PER_MESSAGE)} 个文件`,
+          `A message can include up to ${String(MAX_FILES_PER_MESSAGE)} files`,
+        )
+      }
+      if (genericFiles.some(file => file.size > MAX_FILE_BYTES)) {
+        return attachmentText(t, '单个文件不能超过 20MB', 'Each file must be smaller than 20MB')
+      }
+      const fileBytes = attachedFiles.reduce((sum, attachment) => sum + attachment.file.size, 0)
+        + genericFiles.reduce((sum, file) => sum + file.size, 0)
+      if (fileBytes > MAX_MESSAGE_FILE_BYTES) {
+        return attachmentText(t, '文件总大小不能超过 50MB', 'Files cannot exceed 50MB in total')
       }
       return addImages(files)
     })()
@@ -555,6 +614,12 @@ export function InputBar({
   const onToggleCommandMenu = (): void => {
     const el = inputRef.current
     if (el !== null) toggleCommandMenu?.(selectionOf(el))
+  }
+
+  const onPickAttachments = (event: ChangeEvent<HTMLInputElement>): void => {
+    const files = Array.from(event.currentTarget.files ?? [])
+    intakeAttachments(files)
+    event.currentTarget.value = ''
   }
 
   // Ordinary sessions retain their primary Send/Stop toggle. A continuable
@@ -710,8 +775,8 @@ export function InputBar({
         {renderSlot('conversation.input.attachments', {
           attachments,
           canAcceptDrop,
-          onAddImages: intakeImages,
-          onRemoveImage: (id) => { removeImage?.(id) },
+          onAddAttachments: intakeAttachments,
+          onRemoveAttachment: (id) => { removeImage?.(id) },
           dropLimits: imageLimits === undefined ? undefined : {
             count: imageLimits.maxImagesPerMessage,
             size: imageSizeText(imageLimits.maxImageBytes),
@@ -769,6 +834,31 @@ export function InputBar({
         </div>
         <div className={css.row}>
           <div className={css.tools}>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={ATTACHMENT_ACCEPT}
+              multiple
+              hidden
+              tabIndex={-1}
+              onChange={onPickAttachments}
+            />
+            <Tooltip
+              label={attachmentText(t, '添加附件', 'Add attachments')}
+              side="top"
+              delayMs={500}
+            >
+              <button
+                type="button"
+                className={css.add}
+                aria-label={attachmentText(t, '添加附件', 'Add attachments')}
+                disabled={!canAcceptDrop}
+                onMouseDown={keepFocus}
+                onClick={() => { fileInputRef.current?.click() }}
+              >
+                <IconPlusOutline16 size={14} />
+              </button>
+            </Tooltip>
             <Tooltip label={t('input.commands')} side="top" delayMs={500}>
               <button
                 type="button"
@@ -780,7 +870,7 @@ export function InputBar({
                 onMouseDown={keepFocus}
                 onClick={onToggleCommandMenu}
               >
-                <IconPlusOutline16 size={14} />
+                <span aria-hidden>/</span>
               </button>
             </Tooltip>
             <div className={css.modes}>

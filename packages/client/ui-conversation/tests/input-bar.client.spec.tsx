@@ -6,13 +6,14 @@
 
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
-import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-test-runtime'
+import { bindSnapshotSelector, SlotTestRuntime } from '@deepseek-ai/dsh-client-test-runtime'
 import {
   createSnapshotStore, EMPTY_CHAT_SNAPSHOT, EMPTY_CONVERSATION_VIEWS,
 } from '@deepseek-ai/dsh-client-runtime/client'
 import { makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
+import { en as commonEn } from '@deepseek-ai/dsh-client-locale/src/locales/en.ts'
 import { zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/zh.ts'
-import type { ClientContext, ConversationSnapshot, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ClientContext, ConversationSnapshot, SessionFace, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
 import type { SubmitOutcome } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import { SessionInputShell } from '../src/client/input/facade.ts'
 import type {
@@ -21,7 +22,7 @@ import type {
 import type { DraftAttachmentId } from '../src/client/input/contract.ts'
 import { InputBar } from '../src/client/skeleton/InputBar.tsx'
 import type { InputBarProps } from '../src/client/skeleton/InputBar.tsx'
-import { zh } from '../src/client/locales.ts'
+import { en, zh } from '../src/client/locales.ts'
 
 afterEach(cleanup)
 
@@ -233,7 +234,29 @@ function attachmentOwner(slotCalls: readonly { key: string; owner: unknown }[]):
   throw new Error('attachment slot was not rendered')
 }
 
-describe('image draft rail', () => {
+describe('attachment drafts', () => {
+  it('opens the native attachment picker while keeping the slash-command launcher', () => {
+    const addImages = vi.fn(() => null)
+    const { view } = bench({ addImages })
+    const picker = view.container.querySelector<HTMLInputElement>('input[type="file"]')
+    expect(picker).not.toBeNull()
+    if (picker === null) throw new Error('attachment picker missing')
+    const open = vi.spyOn(picker, 'click')
+
+    fireEvent.click(view.getByRole('button', { name: '添加附件' }))
+    expect(open).toHaveBeenCalledOnce()
+    expect(view.getByRole('button', { name: '命令' })).toBeTruthy()
+    expect(picker.multiple).toBe(true)
+    expect(picker.accept.split(',')).toEqual(expect.arrayContaining([
+      '.csv', '.xlsx', '.docx', '.pdf', '.txt', '.md', '.markdown', '.json',
+      'image/png', 'image/jpeg', 'image/webp', 'image/gif',
+    ]))
+
+    const csv = new File(['name,score\nAda,10'], 'scores.csv', { type: 'text/csv' })
+    fireEvent.change(picker, { target: { files: [csv] } })
+    expect(addImages).toHaveBeenCalledWith([csv])
+  })
+
   it('collects clipboard files while preserving text from a mixed paste', () => {
     const addImages = vi.fn(() => null)
     const { textarea, shell } = bench({ addImages })
@@ -262,7 +285,7 @@ describe('image draft rail', () => {
     }
     const png = (bytes: number, name: string) => new File([new ArrayBuffer(bytes)], name, { type: 'image/png' })
     const intake = (result: ReturnType<typeof bench>, files: File[]) => {
-      act(() => { attachmentOwner(result.slotCalls).onAddImages(files) })
+      act(() => { attachmentOwner(result.slotCalls).onAddAttachments(files) })
     }
     // Count: three at once over a two-image limit → the whole batch refused.
     const overCount = bench({ addImages: vi.fn(() => null), imageLimits: limits })
@@ -292,8 +315,8 @@ describe('image draft rail', () => {
     expect(within.view.queryByRole('alert')).toBeNull()
   })
 
-  it('announces the format problem before any limit when the batch holds a non-image', () => {
-    const addImages = vi.fn(() => '仅支持 PNG、JPG、WebP、GIF 格式的图片')
+  it('announces an unsupported attachment before it enters the draft', () => {
+    const addImages = vi.fn(() => null)
     const result = bench({
       addImages,
       imageLimits: {
@@ -305,14 +328,62 @@ describe('image draft rail', () => {
         mediaTypes: ['image/png'] as const,
       },
     })
-    // Oversized AND over-count AND wrong type: the format rejection wins.
+    // Oversized AND over-count AND wrong type: the format rejection wins and
+    // the service-side draft registry is never called.
     const files = [
-      new File([new ArrayBuffer(64)], 'a.pdf', { type: 'application/pdf' }),
-      new File([new ArrayBuffer(64)], 'b.pdf', { type: 'application/pdf' }),
+      new File([new ArrayBuffer(64)], 'a.exe', { type: 'application/x-msdownload' }),
+      new File([new ArrayBuffer(64)], 'b.exe', { type: 'application/x-msdownload' }),
     ]
-    act(() => { attachmentOwner(result.slotCalls).onAddImages(files) })
-    expect(addImages).toHaveBeenCalledWith(files)
-    expect(result.view.getByRole('alert').textContent).toContain('仅支持 PNG、JPG、WebP、GIF 格式的图片')
+    act(() => { attachmentOwner(result.slotCalls).onAddAttachments(files) })
+    expect(addImages).not.toHaveBeenCalled()
+    expect(result.view.getByRole('alert').textContent).toContain('仅支持 CSV、XLSX、DOCX、PDF、TXT、Markdown、JSON 和图片')
+  })
+
+  it('localizes unsupported attachment feedback in English', () => {
+    const addImages = vi.fn(() => null)
+    const result = bench({ addImages, t: makeTranslate(en, commonEn) })
+    act(() => {
+      attachmentOwner(result.slotCalls).onAddAttachments([
+        new File(['x'], 'bad.exe', { type: 'application/x-msdownload' }),
+      ])
+    })
+    expect(result.view.getByRole('alert').textContent)
+      .toContain('Only CSV, XLSX, DOCX, PDF, TXT, Markdown, JSON, and images are supported')
+    expect(addImages).not.toHaveBeenCalled()
+  })
+
+  it('rejects generic file count, per-file, and aggregate limits before draft creation', () => {
+    const sized = (name: string, bytes: number) => {
+      const file = new File([], name, { type: 'text/csv' })
+      Object.defineProperty(file, 'size', { value: bytes })
+      return file
+    }
+    const intake = (result: ReturnType<typeof bench>, files: File[]) => {
+      act(() => { attachmentOwner(result.slotCalls).onAddAttachments(files) })
+    }
+
+    const overCount = bench({ addImages: vi.fn(() => null) })
+    intake(overCount, Array.from({ length: 11 }, (_, index) => sized(`${String(index)}.csv`, 0)))
+    expect(overCount.view.getByRole('alert').textContent).toContain('一条消息最多添加 10 个文件')
+    expect(overCount.props.addImages).not.toHaveBeenCalled()
+    cleanup()
+
+    const overFile = bench({ addImages: vi.fn(() => null) })
+    intake(overFile, [sized('large.csv', 20 * 1024 * 1024 + 1)])
+    expect(overFile.view.getByRole('alert').textContent).toContain('单个文件不能超过 20MB')
+    expect(overFile.props.addImages).not.toHaveBeenCalled()
+    cleanup()
+
+    const held = {
+      kind: 'file' as const,
+      id: 'held' as DraftAttachmentId,
+      file: sized('held.csv', 40 * 1024 * 1024),
+      fileType: 'csv' as const,
+    }
+    const overTotal = bench({ attachments: [held], addImages: vi.fn(() => null) })
+    intake(overTotal, [sized('more.csv', 10 * 1024 * 1024 + 1)])
+    expect(overTotal.view.getByRole('alert').textContent).toContain('文件总大小不能超过 50MB')
+    expect(overTotal.props.addImages).not.toHaveBeenCalled()
   })
 
   it('projects display-ready limits into the attachment slot', () => {
@@ -363,7 +434,7 @@ describe('image draft rail', () => {
     const { view, textarea, sink, removeImage } = result
     expect((view.getByRole('button', { name: '发送消息' }) as HTMLButtonElement).disabled).toBe(false)
     const owner = attachmentOwner(result.slotCalls)
-    act(() => { owner.onRemoveImage('draft-2' as DraftAttachmentId) })
+    act(() => { owner.onRemoveAttachment('draft-2' as DraftAttachmentId) })
     expect(removeImage).toHaveBeenCalledWith('draft-2')
     let settle!: (outcome: SubmitOutcome) => void
     sink.mockImplementationOnce(() => new Promise<SubmitOutcome>((resolve) => { settle = resolve }))
@@ -376,26 +447,129 @@ describe('image draft rail', () => {
     })
   })
 
-  it('announces an image-intake rejection as a fading toast, repeatable for the same reason', () => {
+  it('keeps a removed generic file out of the submitted attachment order', async () => {
+    const image = new File([Uint8Array.of(1)], 'pixel.png', { type: 'image/png' })
+    const csv = new File(['name,score\nAda,10'], 'scores.csv', { type: 'text/csv' })
+    const attachments = [
+      { kind: 'image' as const, id: 'draft-image' as DraftAttachmentId, file: image, previewUrl: 'blob:image' },
+      {
+        kind: 'file' as const,
+        id: 'draft-file' as DraftAttachmentId,
+        file: csv,
+        fileType: 'csv' as const,
+      },
+    ] as readonly ComposerAttachment[]
+    const result = bench({ attachments })
+
+    act(() => { attachmentOwner(result.slotCalls).onRemoveAttachment('draft-file' as DraftAttachmentId) })
+    expect(result.removeImage).toHaveBeenCalledWith('draft-file')
+    fireEvent.keyDown(result.textarea, { key: 'Enter' })
+
+    expect(result.sink).toHaveBeenCalledWith('', ['draft-image'], 'queue', expect.any(AbortSignal))
+    await act(async () => {})
+  })
+
+  it('serializes mixed draft attachments before trailing text in prompt order', async () => {
+    const service = await import('../src/client/service.ts')
+    expect('serializeComposerPrompt' in service).toBe(true)
+    const serializeComposerPrompt = (service as typeof service & {
+      serializeComposerPrompt: (
+        attachments: readonly ComposerAttachment[],
+        text: string,
+      ) => Promise<unknown>
+    }).serializeComposerPrompt
+    const attachments = [
+      {
+        kind: 'image' as const,
+        id: 'draft-image' as DraftAttachmentId,
+        file: new File([Uint8Array.of(1, 2)], 'pixel.png', { type: 'image/png' }),
+        previewUrl: 'blob:image',
+      },
+      {
+        kind: 'file' as const,
+        id: 'draft-file' as DraftAttachmentId,
+        file: new File(['a,b'], 'data.csv', { type: 'text/csv' }),
+        fileType: 'csv' as const,
+      },
+    ] as readonly ComposerAttachment[]
+
+    await expect(serializeComposerPrompt(attachments, 'inspect both')).resolves.toEqual([
+      { type: 'image', mediaType: 'image/png', data: 'AQI=', name: 'pixel.png' },
+      { type: 'file', mediaType: 'text/csv', data: 'YSxi', name: 'data.csv' },
+      { type: 'text', text: 'inspect both' },
+    ])
+  })
+
+  it('registers generic drafts and submits their file payloads without image preview cleanup', async () => {
+    const service = await import('../src/client/service.ts')
+    const runtime = await SlotTestRuntime.create()
+    const fiber = runtime.ctx.plugin(service.ConversationController, { input: {} as never, blocks: {} as never })
+    await fiber.await()
+    const controller = runtime.ctx.get('conversation') as InstanceType<typeof service.ConversationController>
+    const createUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:image')
+    const revokeUrl = vi.spyOn(URL, 'revokeObjectURL').mockReturnValue(undefined)
+    try {
+      const csv = new File(['a,b'], 'data.csv')
+      const json = new File(['{}'], '', { type: 'application/json' })
+      const image = new File([Uint8Array.of(1)], 'pixel.png', { type: 'image/png' })
+      const attachments = controller.createDraftImages([csv, json, image])
+      expect(attachments.map(attachment => attachment.kind)).toEqual(['file', 'file', 'image'])
+      expect(attachments.slice(0, 2).map(attachment => (
+        attachment.kind === 'file' ? attachment.fileType : null
+      ))).toEqual(['csv', 'json'])
+      expect(createUrl).toHaveBeenCalledOnce()
+
+      const prompt = vi.fn<SessionFace['prompt']>(() => Promise.resolve({
+        ok: true as const, value: { accepted: true as const },
+      }))
+      await expect(controller.sendSession(
+        { prompt } as unknown as SessionFace,
+        'inspect all',
+        attachments.map(attachment => attachment.id),
+        'queue',
+      )).resolves.toEqual({ kind: 'success' })
+      expect(prompt).toHaveBeenCalledWith([
+        { type: 'file', mediaType: 'text/csv', data: 'YSxi', name: 'data.csv' },
+        { type: 'file', mediaType: 'application/json', data: 'e30=' },
+        { type: 'image', mediaType: 'image/png', data: 'AQ==', name: 'pixel.png' },
+        { type: 'text', text: 'inspect all' },
+      ], 'queue', undefined)
+      expect(controller.draftImages(attachments.map(attachment => attachment.id))).toEqual([])
+      expect(revokeUrl).toHaveBeenCalledExactlyOnceWith('blob:image')
+
+      const [generic] = controller.createDraftImages([csv])
+      if (generic === undefined) throw new Error('generic draft missing')
+      await expect(controller.serializeDraftImages([generic.id])).rejects.toThrow('do not accept generic files')
+      controller.releaseDraftImage(generic.id)
+      expect(revokeUrl).toHaveBeenCalledOnce()
+    } finally {
+      createUrl.mockRestore()
+      revokeUrl.mockRestore()
+      await runtime.dispose()
+    }
+  })
+
+  it('announces an attachment-intake rejection as a fading toast, repeatable for the same reason', () => {
     vi.useFakeTimers()
     try {
-      const addImages = vi.fn(() => '仅支持 PNG、JPG、WebP、GIF 格式的图片')
+      const addImages = vi.fn(() => null)
       const { view, textarea } = bench({ addImages })
       const paste = () => {
         fireEvent.paste(textarea, {
           clipboardData: {
-            items: [{ kind: 'file', type: 'text/plain', getAsFile: () => new File(['x'], 'note.txt', { type: 'text/plain' }) }],
+            items: [{ kind: 'file', type: 'application/x-msdownload', getAsFile: () => new File(['x'], 'bad.exe', { type: 'application/x-msdownload' }) }],
             getData: () => '',
           },
         })
       }
       paste()
-      expect(view.getByRole('alert').textContent).toContain('仅支持 PNG、JPG、WebP、GIF 格式的图片')
+      expect(view.getByRole('alert').textContent).toContain('仅支持 CSV、XLSX、DOCX、PDF、TXT、Markdown、JSON 和图片')
+      expect(addImages).not.toHaveBeenCalled()
       act(() => { vi.advanceTimersByTime(4000) })
       expect(view.queryByRole('alert')).toBeNull()
       // The identical rejection re-announces: the toast is keyed per show.
       paste()
-      expect(view.getByRole('alert').textContent).toContain('仅支持 PNG、JPG、WebP、GIF 格式的图片')
+      expect(view.getByRole('alert').textContent).toContain('仅支持 CSV、XLSX、DOCX、PDF、TXT、Markdown、JSON 和图片')
     } finally {
       vi.useRealTimers()
     }
@@ -405,7 +579,7 @@ describe('image draft rail', () => {
     const addImages = vi.fn(() => '图片读取服务不可用')
     const result = bench({ addImages })
     act(() => {
-      attachmentOwner(result.slotCalls).onAddImages([
+      attachmentOwner(result.slotCalls).onAddAttachments([
         new File([Uint8Array.of(1)], 'x.png', { type: 'image/png' }),
       ])
     })
