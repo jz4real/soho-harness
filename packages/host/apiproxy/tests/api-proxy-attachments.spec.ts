@@ -176,7 +176,33 @@ describe('session prompt file admission', () => {
     await ctx.fiber.dispose()
   })
 
-  it.each(['', 'YQ', 'not-base64!!'])(
+  it('persists a zero-byte file from its canonical empty encoding', async () => {
+    const { ctx, sessionId, followup, saveFiles } = await harness()
+    const api = createApiProxy(ctx, {
+      defaultModelSelection: () => ({ provider: 'test', model: 'model' }),
+      cwd: '/tmp',
+    })
+
+    await expect(api.sessions.prompt(request({
+      sessionId,
+      mode: 'queue' as const,
+      content: [{ type: 'file' as const, mediaType: 'text/plain', data: '', name: 'empty.txt' }],
+    }))).resolves.toMatchObject({ result: { ok: true } })
+
+    expect(saveFiles).toHaveBeenCalledWith([{
+      data: new Uint8Array(), mediaType: 'text/plain', name: 'empty.txt',
+    }])
+    expect((followup.mock.calls[0]?.[0] as UserMessage).content).toEqual([
+      {
+        type: 'file',
+        attachment: { attachmentId: 'file-0', mediaType: 'text/plain', bytes: 0, name: 'empty.txt' },
+      },
+      { type: 'text', text: '[File: empty.txt]\n' },
+    ])
+    await ctx.fiber.dispose()
+  })
+
+  it.each(['YQ', 'not-base64!!'])(
     'rejects non-canonical file base64 %j before storage or followup',
     async (data) => {
       const { ctx, sessionId, followup, saveFiles } = await harness()

@@ -66,6 +66,14 @@ describe('admitEncodedImages', () => {
 })
 
 describe('decodeEncodedFiles', () => {
+  it('accepts the canonical empty encoding for a zero-byte generic file', () => {
+    expect(decodeEncodedFiles([{
+      mediaType: 'text/plain', data: '', name: 'empty.txt',
+    }])).toEqual([{
+      mediaType: 'text/plain', data: new Uint8Array(), name: 'empty.txt',
+    }])
+  })
+
   it('decodes a canonical ordered batch for storage and extraction', () => {
     expect(decodeEncodedFiles([
       { mediaType: 'text/plain', data: 'YQ==', name: 'a.txt' },
@@ -76,7 +84,7 @@ describe('decodeEncodedFiles', () => {
     ])
   })
 
-  it.each(['', 'YQ', 'not-base64!!'])(
+  it.each(['YQ', 'not-base64!!'])(
     'rejects non-canonical payload %j',
     (data) => {
       expect(() => decodeEncodedFiles([{ mediaType: 'text/plain', data }]))

@@ -18,7 +18,7 @@ function decodeBase64(
   code: 'INVALID_IMAGE_BASE64' | 'INVALID_FILE_BASE64',
 ): Uint8Array {
   const decoded = Buffer.from(data, 'base64')
-  if (data.length === 0 || decoded.toString('base64') !== data) {
+  if ((kind === 'Image' && data.length === 0) || decoded.toString('base64') !== data) {
     throw new AttachmentError(`${kind} upload is not canonical base64.`, code)
   }
   return new Uint8Array(decoded)
