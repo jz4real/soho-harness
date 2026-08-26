@@ -5,8 +5,9 @@ import type { SaveFileAttachment } from '@deepseek-ai/dsh-attachment'
 
 /** Maximum Unicode code points returned for one extracted file. */
 export const MAX_EXTRACTED_FILE_TEXT_CODE_POINTS = 60_000
-/** Maximum bytes materialized from one untrusted ZIP or compressed PDF stream. */
+/** Maximum cumulative bytes materialized from ZIP or compressed PDF streams. */
 export const MAX_COMPRESSED_ENTRY_OUTPUT_BYTES = 4 * 1024 * 1024
+const MAX_ZIP_ENTRIES = 256
 
 export interface ExtractedFileText {
   text: string
@@ -18,6 +19,7 @@ interface ZipEntry {
   method: number
   compressed: Uint8Array
   uncompressedSize: number
+  crc32: number
 }
 
 type LimitedText = Pick<ExtractedFileText, 'text' | 'truncated'>
@@ -25,9 +27,14 @@ type LimitedText = Pick<ExtractedFileText, 'text' | 'truncated'>
 class TextCollector {
   private readonly codePoints: string[] = []
   private _truncated = false
+  private _hasVisibleText = false
 
   get truncated(): boolean {
     return this._truncated
+  }
+
+  get hasVisibleText(): boolean {
+    return this._hasVisibleText
   }
 
   append(text: string): void {
@@ -37,12 +44,23 @@ class TextCollector {
         this._truncated = true
         return
       }
+      if (!/\s/.test(codePoint)) this._hasVisibleText = true
       this.codePoints.push(codePoint)
     }
   }
 
   result(): LimitedText {
     return { text: this.codePoints.join(''), truncated: this._truncated }
+  }
+}
+
+class DecompressionBudget {
+  private remaining = MAX_COMPRESSED_ENTRY_OUTPUT_BYTES
+
+  reserve(bytes: number): number {
+    if (bytes > this.remaining) throw new Error('Compressed file exceeds the local extraction budget.')
+    this.remaining -= bytes
+    return bytes
   }
 }
 
@@ -60,6 +78,15 @@ function decodeUtf8(data: Uint8Array): string {
   return new TextDecoder('utf-8', { fatal: true }).decode(data)
 }
 
+function crc32(data: Uint8Array): number {
+  let value = 0xffffffff
+  for (const byte of data) {
+    value ^= byte
+    for (let bit = 0; bit < 8; bit += 1) value = (value >>> 1) ^ (value & 1 ? 0xedb88320 : 0)
+  }
+  return (value ^ 0xffffffff) >>> 0
+}
+
 function readZipEntries(data: Uint8Array): Map<string, ZipEntry> {
   let end = -1
   for (let offset = data.byteLength - 22; offset >= Math.max(0, data.byteLength - 65_557); offset -= 1) {
@@ -70,6 +97,7 @@ function readZipEntries(data: Uint8Array): Map<string, ZipEntry> {
   }
   if (end < 0) throw new Error('ZIP directory is missing.')
   const count = readUint16(data, end + 10)
+  if (count > MAX_ZIP_ENTRIES) throw new Error('ZIP has too many entries.')
   const size = readUint32(data, end + 12)
   let offset = readUint32(data, end + 16)
   if (offset + size > end) throw new Error('ZIP central directory is invalid.')
@@ -77,6 +105,7 @@ function readZipEntries(data: Uint8Array): Map<string, ZipEntry> {
   for (let index = 0; index < count; index += 1) {
     if (readUint32(data, offset) !== 0x02014b50) throw new Error('ZIP entry is invalid.')
     const method = readUint16(data, offset + 10)
+    const checksum = readUint32(data, offset + 16)
     const compressedSize = readUint32(data, offset + 20)
     const uncompressedSize = readUint32(data, offset + 24)
     const nameLength = readUint16(data, offset + 28)
@@ -85,28 +114,49 @@ function readZipEntries(data: Uint8Array): Map<string, ZipEntry> {
     const localOffset = readUint32(data, offset + 42)
     const name = decodeUtf8(data.subarray(offset + 46, offset + 46 + nameLength))
     if (readUint32(data, localOffset) !== 0x04034b50) throw new Error('ZIP local entry is invalid.')
+    if (readUint16(data, localOffset + 8) !== method || readUint32(data, localOffset + 14) !== checksum) {
+      throw new Error('ZIP local entry metadata is invalid.')
+    }
     const localNameLength = readUint16(data, localOffset + 26)
     const localExtraLength = readUint16(data, localOffset + 28)
     const start = localOffset + 30 + localNameLength + localExtraLength
     const finish = start + compressedSize
     if (finish > data.byteLength) throw new Error('ZIP entry data is truncated.')
-    entries.set(name, { method, compressed: data.subarray(start, finish), uncompressedSize })
+    entries.set(name, { method, compressed: data.subarray(start, finish), uncompressedSize, crc32: checksum })
     offset += 46 + nameLength + extraLength + commentLength
   }
   return entries
 }
 
-function unzipText(entry: ZipEntry): string {
-  if (entry.uncompressedSize > MAX_COMPRESSED_ENTRY_OUTPUT_BYTES) {
-    throw new Error('ZIP entry exceeds the local extraction budget.')
-  }
+function unzipText(entry: ZipEntry, budget: DecompressionBudget): string {
+  const maxOutputLength = budget.reserve(entry.uncompressedSize)
   const data = entry.method === 0
     ? entry.compressed
     : entry.method === 8
-      ? new Uint8Array(inflateRawSync(entry.compressed, { maxOutputLength: MAX_COMPRESSED_ENTRY_OUTPUT_BYTES }))
+      ? new Uint8Array(inflateRawSync(entry.compressed, { maxOutputLength }))
       : (() => { throw new Error('Unsupported ZIP compression.') })()
-  if (data.byteLength !== entry.uncompressedSize) throw new Error('ZIP entry length is invalid.')
+  if (data.byteLength !== entry.uncompressedSize || crc32(data) !== entry.crc32) throw new Error('ZIP entry integrity check failed.')
   return decodeUtf8(data)
+}
+
+function readOfficeEntry(entries: Map<string, ZipEntry>, name: string, budget: DecompressionBudget): string {
+  const entry = entries.get(name)
+  if (entry === undefined) throw new Error(`Office package entry ${name} is missing.`)
+  return unzipText(entry, budget)
+}
+
+function validateOfficePackage(
+  entries: Map<string, ZipEntry>,
+  contentType: string,
+  target: string,
+  budget: DecompressionBudget,
+): void {
+  const contentTypes = readOfficeEntry(entries, '[Content_Types].xml', budget)
+  const rootRelationships = readOfficeEntry(entries, '_rels/.rels', budget)
+  if (!contentTypes.includes('<Types') || !contentTypes.includes(contentType)
+    || !rootRelationships.includes('<Relationships') || !rootRelationships.includes(target)) {
+    throw new Error('Office package structure is invalid.')
+  }
 }
 
 function decodeXmlText(value: string): string {
@@ -127,9 +177,10 @@ function appendXmlTagText(xml: string, tag: string, collector: TextCollector): v
 }
 
 function extractDocx(data: Uint8Array): LimitedText {
-  const entry = readZipEntries(data).get('word/document.xml')
-  if (entry === undefined) throw new Error('DOCX document XML is missing.')
-  const xml = unzipText(entry)
+  const entries = readZipEntries(data)
+  const budget = new DecompressionBudget()
+  validateOfficePackage(entries, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml', 'word/document.xml', budget)
+  const xml = readOfficeEntry(entries, 'word/document.xml', budget)
   if (!xml.includes('<w:document')) throw new Error('DOCX document XML is invalid.')
   const collector = new TextCollector()
   appendXmlTagText(xml, 'w:t', collector)
@@ -138,10 +189,14 @@ function extractDocx(data: Uint8Array): LimitedText {
 
 function extractXlsx(data: Uint8Array): LimitedText {
   const entries = readZipEntries(data)
+  const budget = new DecompressionBudget()
+  validateOfficePackage(entries, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml', 'xl/workbook.xml', budget)
+  const workbook = readOfficeEntry(entries, 'xl/workbook.xml', budget)
+  if (!workbook.includes('<workbook')) throw new Error('XLSX workbook XML is invalid.')
   if (![...entries.keys()].some(name => name.startsWith('xl/worksheets/'))) throw new Error('XLSX worksheet XML is missing.')
   const collector = new TextCollector()
   for (const [name, entry] of entries) {
-    if (name === 'xl/sharedStrings.xml' || name.startsWith('xl/worksheets/')) appendXmlTagText(unzipText(entry), 't', collector)
+    if (name === 'xl/sharedStrings.xml' || name.startsWith('xl/worksheets/')) appendXmlTagText(unzipText(entry, budget), 't', collector)
     if (collector.truncated) break
   }
   return collector.result()
@@ -166,23 +221,56 @@ function appendPdfText(stream: string, collector: TextCollector): void {
   }
 }
 
-function extractPdf(data: Uint8Array): LimitedText {
-  const source = new TextDecoder('latin1').decode(data)
-  if (!source.startsWith('%PDF-') || !/\bxref\s+\d+\s+\d+/.test(source)
-    || !/\btrailer\s*<<[\s\S]*?\/Root\s+\d+\s+\d+\s+R[\s\S]*?>>\s*startxref\s+\d+\s+%%EOF\s*$/.test(source)) {
+function validatePdfStructure(source: string): void {
+  const trailer = /trailer\s*<<([\s\S]*?)>>\s*startxref\s+(\d+)\s+%%EOF\s*$/.exec(source)
+  const root = trailer?.[1] === undefined ? undefined : /\/Root\s+(\d+)\s+(\d+)\s+R/.exec(trailer[1])
+  if (!source.startsWith('%PDF-') || trailer === null || root === null || root === undefined) {
     throw new Error('PDF structure is invalid.')
   }
+  const xrefOffset = Number(trailer[2])
+  if (!Number.isSafeInteger(xrefOffset) || source.slice(xrefOffset, xrefOffset + 4) !== 'xref') {
+    throw new Error('PDF xref offset is invalid.')
+  }
+  const xref = /^xref\s+(\d+)\s+(\d+)\r?\n/.exec(source.slice(xrefOffset))
+  if (xref === null) throw new Error('PDF xref is invalid.')
+  const firstObject = Number(xref[1])
+  const count = Number(xref[2])
+  let offset = xrefOffset + xref[0].length
+  const objects = new Set<string>()
+  for (let index = 0; index < count; index += 1) {
+    const entry = /^(\d{10})\s(\d{5})\s([fn])\s*\r?\n/.exec(source.slice(offset))
+    if (entry === null) throw new Error('PDF xref entry is invalid.')
+    offset += entry[0].length
+    if (entry[3] === 'n') {
+      const object = firstObject + index
+      const generation = Number(entry[2])
+      const objectOffset = Number(entry[1])
+      if (source.slice(objectOffset, objectOffset + `${object} ${generation} obj`.length) !== `${object} ${generation} obj`) {
+        throw new Error('PDF xref points to an invalid object.')
+      }
+      objects.add(`${object} ${generation}`)
+    }
+  }
+  if (!objects.has(`${root[1]} ${root[2]}`)) throw new Error('PDF root object is invalid.')
+}
+
+function extractPdf(data: Uint8Array): LimitedText {
+  const source = new TextDecoder('latin1').decode(data)
+  validatePdfStructure(source)
   const collector = new TextCollector()
+  const budget = new DecompressionBudget()
   appendPdfText(source, collector)
   for (const match of source.matchAll(/<<([\s\S]*?)>>\s*stream\r?\n([\s\S]*?)\r?\nendstream/g)) {
     const dictionary = match[1] ?? ''
     const bytes = match[2] ?? ''
     if (!dictionary.includes('/FlateDecode')) continue
+    const maxOutputLength = budget.reserve(MAX_COMPRESSED_ENTRY_OUTPUT_BYTES)
     appendPdfText(new TextDecoder('latin1').decode(inflateRawSync(Buffer.from(bytes, 'latin1'), {
-      maxOutputLength: MAX_COMPRESSED_ENTRY_OUTPUT_BYTES,
+      maxOutputLength,
     })), collector)
     if (collector.truncated) break
   }
+  if (!collector.hasVisibleText) throw new Error('PDF has no visible text.')
   return collector.result()
 }
 

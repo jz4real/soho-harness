@@ -77,6 +77,40 @@ function zip(entries: Record<string, string>, compression: 'store' | 'deflate' =
   return Uint8Array.from(parts)
 }
 
+const DOCX_CONTENT_TYPES = '<Types><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'
+const XLSX_CONTENT_TYPES = '<Types><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>'
+
+function pdf(text: string | undefined, startxrefDelta = 0): Uint8Array {
+  const objects = [
+    '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n',
+    '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n',
+    '3 0 obj\n<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>\nendobj\n',
+    `4 0 obj\n<< /Length 20 >>\nstream\nBT ${text === undefined ? '' : `(${text}) Tj`} ET\nendstream\nendobj\n`,
+  ]
+  let source = '%PDF-1.4\n'
+  const offsets = objects.map((object) => {
+    const offset = encoder.encode(source).byteLength
+    source += object
+    return offset
+  })
+  const xrefOffset = encoder.encode(source).byteLength
+  source += `xref\n0 5\n0000000000 65535 f \n${offsets.map(offset => `${String(offset).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Root 1 0 R >>\nstartxref\n${xrefOffset + startxrefDelta}\n%%EOF`
+  return encoder.encode(source)
+}
+
+function replaceFirst(data: Uint8Array, from: string, to: string): Uint8Array {
+  const needle = encoder.encode(from)
+  const replacement = encoder.encode(to)
+  const copy = Uint8Array.from(data)
+  for (let index = 0; index <= copy.byteLength - needle.byteLength; index += 1) {
+    if (needle.every((byte, offset) => copy[index + offset] === byte)) {
+      copy.set(replacement, index)
+      return copy
+    }
+  }
+  throw new Error(`Could not find ${from} in fixture.`)
+}
+
 describe('local file text extraction', () => {
   it('returns readable CSV and UTF-8 text', async () => {
     await expect(extractFileText({
@@ -89,11 +123,14 @@ describe('local file text extraction', () => {
 
   it('extracts readable DOCX and XLSX XML content with a name or standard media type', async () => {
     const docx = zip({
-      '[Content_Types].xml': '<Types/>',
+      '[Content_Types].xml': DOCX_CONTENT_TYPES,
+      '_rels/.rels': '<Relationships><Relationship Type="officeDocument" Target="word/document.xml"/></Relationships>',
       'word/document.xml': '<w:document><w:body><w:p><w:r><w:t>DOCX hello</w:t></w:r></w:p></w:body></w:document>',
     })
     const xlsx = zip({
-      '[Content_Types].xml': '<Types/>',
+      '[Content_Types].xml': XLSX_CONTENT_TYPES,
+      '_rels/.rels': '<Relationships><Relationship Type="officeDocument" Target="xl/workbook.xml"/></Relationships>',
+      'xl/workbook.xml': '<workbook/>',
       'xl/sharedStrings.xml': '<sst><si><t>XLSX shared text</t></si></sst>',
       'xl/worksheets/sheet1.xml': '<worksheet><sheetData><row><c t="s"><v>0</v></c></row></sheetData></worksheet>',
     })
@@ -115,10 +152,17 @@ describe('local file text extraction', () => {
   })
 
   it('extracts readable text from a valid local PDF', async () => {
-    const pdf = encoder.encode('%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>\nendobj\n4 0 obj\n<< /Length 37 >>\nstream\nBT /F1 12 Tf 72 720 Td (Local PDF text) Tj ET\nendstream\nendobj\nxref\n0 5\n0000000000 65535 f \ntrailer\n<< /Root 1 0 R >>\nstartxref\n0\n%%EOF')
+    const data = pdf('Local PDF text')
 
-    await expect(extractFileText({ data: pdf, name: 'local.pdf', mediaType: 'application/pdf' }))
+    await expect(extractFileText({ data, name: 'local.pdf', mediaType: 'application/pdf' }))
       .resolves.toEqual({ text: 'Local PDF text', truncated: false, status: 'ready' })
+  })
+
+  it('rejects PDFs with corrupt xref data or no visible text operator', async () => {
+    await expect(extractFileText({ data: pdf('Broken xref', 1), name: 'broken-xref.pdf' }))
+      .resolves.toEqual({ text: '', truncated: false, status: 'unavailable' })
+    await expect(extractFileText({ data: pdf(undefined), name: 'blank.pdf' }))
+      .resolves.toEqual({ text: '', truncated: false, status: 'unavailable' })
   })
 
   it('limits extracted text by Unicode code point and reports truncation', async () => {
@@ -131,10 +175,39 @@ describe('local file text extraction', () => {
 
   it('rejects Office entries whose compressed data expands beyond the local extraction budget', async () => {
     const docx = zip({
+      '[Content_Types].xml': DOCX_CONTENT_TYPES,
+      '_rels/.rels': '<Relationships><Relationship Type="officeDocument" Target="word/document.xml"/></Relationships>',
       'word/document.xml': `<w:document><w:body><w:t>${'a'.repeat(5 * 1024 * 1024)}</w:t></w:body></w:document>`,
     }, 'deflate')
 
     await expect(extractFileText({ data: docx, name: 'oversized.docx' }))
+      .resolves.toEqual({ text: '', truncated: false, status: 'unavailable' })
+  })
+
+  it('rejects Office files that exceed one cumulative decompression budget or fail ZIP CRC validation', async () => {
+    const xlsx = zip({
+      '[Content_Types].xml': XLSX_CONTENT_TYPES,
+      '_rels/.rels': '<Relationships><Relationship Type="officeDocument" Target="xl/workbook.xml"/></Relationships>',
+      'xl/workbook.xml': '<workbook/>',
+      'xl/sharedStrings.xml': `<sst><!-- ${'a'.repeat(3 * 1024 * 1024)} --></sst>`,
+      'xl/worksheets/sheet1.xml': `<worksheet><!-- ${'b'.repeat(3 * 1024 * 1024)} --></worksheet>`,
+    }, 'deflate')
+    const docx = zip({
+      '[Content_Types].xml': DOCX_CONTENT_TYPES,
+      '_rels/.rels': '<Relationships><Relationship Type="officeDocument" Target="word/document.xml"/></Relationships>',
+      'word/document.xml': '<w:document><w:body><w:t>CRC text</w:t></w:body></w:document>',
+    })
+
+    await expect(extractFileText({ data: xlsx, name: 'cumulative.xlsx' }))
+      .resolves.toEqual({ text: '', truncated: false, status: 'unavailable' })
+    await expect(extractFileText({ data: replaceFirst(docx, 'CRC text', 'BAD text'), name: 'corrupt.docx' }))
+      .resolves.toEqual({ text: '', truncated: false, status: 'unavailable' })
+  })
+
+  it('rejects malformed OpenXML package structures', async () => {
+    const docx = zip({ 'word/document.xml': '<w:document><w:body><w:t>orphan</w:t></w:body></w:document>' })
+
+    await expect(extractFileText({ data: docx, name: 'orphan.docx' }))
       .resolves.toEqual({ text: '', truncated: false, status: 'unavailable' })
   })
 
