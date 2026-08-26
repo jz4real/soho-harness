@@ -5,6 +5,8 @@ import type { SaveFileAttachment } from '@deepseek-ai/dsh-attachment'
 
 /** Maximum Unicode code points returned for one extracted file. */
 export const MAX_EXTRACTED_FILE_TEXT_CODE_POINTS = 60_000
+/** Maximum bytes materialized from one untrusted ZIP or compressed PDF stream. */
+export const MAX_COMPRESSED_ENTRY_OUTPUT_BYTES = 4 * 1024 * 1024
 
 export interface ExtractedFileText {
   text: string
@@ -16,6 +18,32 @@ interface ZipEntry {
   method: number
   compressed: Uint8Array
   uncompressedSize: number
+}
+
+type LimitedText = Pick<ExtractedFileText, 'text' | 'truncated'>
+
+class TextCollector {
+  private readonly codePoints: string[] = []
+  private _truncated = false
+
+  get truncated(): boolean {
+    return this._truncated
+  }
+
+  append(text: string): void {
+    if (this._truncated) return
+    for (const codePoint of text) {
+      if (this.codePoints.length === MAX_EXTRACTED_FILE_TEXT_CODE_POINTS) {
+        this._truncated = true
+        return
+      }
+      this.codePoints.push(codePoint)
+    }
+  }
+
+  result(): LimitedText {
+    return { text: this.codePoints.join(''), truncated: this._truncated }
+  }
 }
 
 function readUint16(data: Uint8Array, offset: number): number {
@@ -69,10 +97,13 @@ function readZipEntries(data: Uint8Array): Map<string, ZipEntry> {
 }
 
 function unzipText(entry: ZipEntry): string {
+  if (entry.uncompressedSize > MAX_COMPRESSED_ENTRY_OUTPUT_BYTES) {
+    throw new Error('ZIP entry exceeds the local extraction budget.')
+  }
   const data = entry.method === 0
     ? entry.compressed
     : entry.method === 8
-      ? new Uint8Array(inflateRawSync(entry.compressed))
+      ? new Uint8Array(inflateRawSync(entry.compressed, { maxOutputLength: MAX_COMPRESSED_ENTRY_OUTPUT_BYTES }))
       : (() => { throw new Error('Unsupported ZIP compression.') })()
   if (data.byteLength !== entry.uncompressedSize) throw new Error('ZIP entry length is invalid.')
   return decodeUtf8(data)
@@ -88,27 +119,32 @@ function decodeXmlText(value: string): string {
     .replace(/&amp;/g, '&')
 }
 
-function xmlTagText(xml: string, tag: string): string[] {
-  return [...xml.matchAll(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`, 'g'))]
-    .map(match => decodeXmlText((match[1] ?? '').replace(/<[^>]+>/g, '')))
+function appendXmlTagText(xml: string, tag: string, collector: TextCollector): void {
+  for (const match of xml.matchAll(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`, 'g'))) {
+    collector.append(decodeXmlText((match[1] ?? '').replace(/<[^>]+>/g, '')))
+    if (collector.truncated) return
+  }
 }
 
-function extractDocx(data: Uint8Array): string {
+function extractDocx(data: Uint8Array): LimitedText {
   const entry = readZipEntries(data).get('word/document.xml')
   if (entry === undefined) throw new Error('DOCX document XML is missing.')
   const xml = unzipText(entry)
   if (!xml.includes('<w:document')) throw new Error('DOCX document XML is invalid.')
-  return xmlTagText(xml, 'w:t').join('')
+  const collector = new TextCollector()
+  appendXmlTagText(xml, 'w:t', collector)
+  return collector.result()
 }
 
-function extractXlsx(data: Uint8Array): string {
+function extractXlsx(data: Uint8Array): LimitedText {
   const entries = readZipEntries(data)
   if (![...entries.keys()].some(name => name.startsWith('xl/worksheets/'))) throw new Error('XLSX worksheet XML is missing.')
-  const text: string[] = []
+  const collector = new TextCollector()
   for (const [name, entry] of entries) {
-    if (name === 'xl/sharedStrings.xml' || name.startsWith('xl/worksheets/')) text.push(...xmlTagText(unzipText(entry), 't'))
+    if (name === 'xl/sharedStrings.xml' || name.startsWith('xl/worksheets/')) appendXmlTagText(unzipText(entry), 't', collector)
+    if (collector.truncated) break
   }
-  return text.join('\n')
+  return collector.result()
 }
 
 function unescapePdfString(value: string): string {
@@ -117,32 +153,43 @@ function unescapePdfString(value: string): string {
   })[escaped] ?? escaped)
 }
 
-function extractPdf(data: Uint8Array): string {
+function appendPdfText(stream: string, collector: TextCollector): void {
+  for (const match of stream.matchAll(/\((?:\\.|[^\\()])*\)\s*Tj\b/g)) {
+    collector.append(unescapePdfString(match[0].replace(/\)\s*Tj\b/, '').slice(1)))
+    if (collector.truncated) return
+  }
+  for (const match of stream.matchAll(/\[([\s\S]*?)\]\s*TJ\b/g)) {
+    for (const literal of (match[1] ?? '').matchAll(/\((?:\\.|[^\\()])*\)/g)) {
+      collector.append(unescapePdfString(literal[0].slice(1, -1)))
+      if (collector.truncated) return
+    }
+  }
+}
+
+function extractPdf(data: Uint8Array): LimitedText {
   const source = new TextDecoder('latin1').decode(data)
-  if (!source.startsWith('%PDF-') || !source.includes('%%EOF') || !/\b\d+\s+\d+\s+obj\b/.test(source)) {
+  if (!source.startsWith('%PDF-') || !/\bxref\s+\d+\s+\d+/.test(source)
+    || !/\btrailer\s*<<[\s\S]*?\/Root\s+\d+\s+\d+\s+R[\s\S]*?>>\s*startxref\s+\d+\s+%%EOF\s*$/.test(source)) {
     throw new Error('PDF structure is invalid.')
   }
-  const streams: string[] = [source]
+  const collector = new TextCollector()
+  appendPdfText(source, collector)
   for (const match of source.matchAll(/<<([\s\S]*?)>>\s*stream\r?\n([\s\S]*?)\r?\nendstream/g)) {
     const dictionary = match[1] ?? ''
     const bytes = match[2] ?? ''
     if (!dictionary.includes('/FlateDecode')) continue
-    streams.push(new TextDecoder('latin1').decode(inflateRawSync(Buffer.from(bytes, 'latin1'))))
+    appendPdfText(new TextDecoder('latin1').decode(inflateRawSync(Buffer.from(bytes, 'latin1'), {
+      maxOutputLength: MAX_COMPRESSED_ENTRY_OUTPUT_BYTES,
+    })), collector)
+    if (collector.truncated) break
   }
-  const values: string[] = []
-  for (const stream of streams) {
-    for (const match of stream.matchAll(/\((?:\\.|[^\\()])*\)\s*Tj\b/g)) values.push(unescapePdfString(match[0].replace(/\)\s*Tj\b/, '').slice(1)))
-    for (const match of stream.matchAll(/\[([\s\S]*?)\]\s*TJ\b/g)) {
-      for (const literal of (match[1] ?? '').matchAll(/\((?:\\.|[^\\()])*\)/g)) values.push(unescapePdfString(literal[0].slice(1, -1)))
-    }
-  }
-  return values.join('')
+  return collector.result()
 }
 
 function fileKind(input: SaveFileAttachment): 'text' | 'docx' | 'xlsx' | 'pdf' | undefined {
   const name = input.name?.toLowerCase()
-  if (name?.endsWith('.docx')) return 'docx'
-  if (name?.endsWith('.xlsx')) return 'xlsx'
+  if (name?.endsWith('.docx') || input.mediaType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') return 'docx'
+  if (name?.endsWith('.xlsx') || input.mediaType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') return 'xlsx'
   if (name?.endsWith('.pdf') || input.mediaType === 'application/pdf') return 'pdf'
   if (name?.match(/\.(csv|json|md|markdown|txt)$/) || input.mediaType?.startsWith('text/') || input.mediaType === 'application/json') return 'text'
   return undefined
@@ -160,7 +207,7 @@ function truncateText(text: string): Pick<ExtractedFileText, 'text' | 'truncated
 function extractLocalFileText(input: SaveFileAttachment): ExtractedFileText {
   try {
     const kind = fileKind(input)
-    const text = kind === 'text'
+    const result = kind === 'text'
       ? decodeUtf8(input.data)
       : kind === 'docx'
         ? extractDocx(input.data)
@@ -169,8 +216,8 @@ function extractLocalFileText(input: SaveFileAttachment): ExtractedFileText {
           : kind === 'pdf'
             ? extractPdf(input.data)
             : undefined
-    if (text === undefined) return { text: '', truncated: false, status: 'unavailable' }
-    return { ...truncateText(text), status: 'ready' }
+    if (result === undefined) return { text: '', truncated: false, status: 'unavailable' }
+    return { ...(typeof result === 'string' ? truncateText(result) : result), status: 'ready' }
   } catch {
     return { text: '', truncated: false, status: 'unavailable' }
   }

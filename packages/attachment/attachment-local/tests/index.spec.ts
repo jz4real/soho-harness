@@ -9,11 +9,14 @@ import LocalAttachmentStore, {
   DEFAULT_NORMALIZED_IMAGE_MAX_BYTES,
   DEFAULT_NORMALIZED_IMAGE_MAX_DIMENSION,
   DEFAULT_IMAGE_COMPRESSION_CONCURRENCY,
+  DEFAULT_MAX_FILE_BYTES,
+  DEFAULT_MAX_FILES_PER_MESSAGE,
   DEFAULT_MAX_IMAGE_BYTES,
   DEFAULT_MAX_IMAGE_DIMENSION,
   DEFAULT_MAX_IMAGE_PIXELS,
   DEFAULT_MAX_IMAGES_PER_MESSAGE,
   DEFAULT_MAX_MESSAGE_IMAGE_BYTES,
+  DEFAULT_MAX_MESSAGE_FILE_BYTES,
 } from '../src/index.ts'
 
 describe('local attachment service', () => {
@@ -24,6 +27,9 @@ describe('local attachment service', () => {
     expect(DEFAULT_MAX_MESSAGE_IMAGE_BYTES).toBe(200 * 1024 * 1024)
     expect(DEFAULT_MAX_IMAGE_PIXELS).toBe(64_000_000)
     expect(DEFAULT_MAX_IMAGE_DIMENSION).toBe(8192)
+    expect(DEFAULT_MAX_FILE_BYTES).toBe(20 * 1024 * 1024)
+    expect(DEFAULT_MAX_FILES_PER_MESSAGE).toBe(10)
+    expect(DEFAULT_MAX_MESSAGE_FILE_BYTES).toBe(50 * 1024 * 1024)
     expect(service.imageLimits).toEqual({
       maxImageBytes: DEFAULT_MAX_IMAGE_BYTES,
       maxImagesPerMessage: DEFAULT_MAX_IMAGES_PER_MESSAGE,
@@ -31,6 +37,11 @@ describe('local attachment service', () => {
       maxImagePixels: DEFAULT_MAX_IMAGE_PIXELS,
       maxImageDimension: DEFAULT_MAX_IMAGE_DIMENSION,
       mediaTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
+    })
+    expect(service.fileLimits).toEqual({
+      maxFileBytes: DEFAULT_MAX_FILE_BYTES,
+      maxFilesPerMessage: DEFAULT_MAX_FILES_PER_MESSAGE,
+      maxMessageFileBytes: DEFAULT_MAX_MESSAGE_FILE_BYTES,
     })
     expect(service.normalizationPolicy).toEqual({
       maxDimension: DEFAULT_NORMALIZED_IMAGE_MAX_DIMENSION,
@@ -57,6 +68,27 @@ describe('local attachment service', () => {
       ))
       const ref = await service.saveImage({ data, mediaType: 'image/png' })
       await expect(service.readImage(ref)).resolves.toEqual({ ref, data })
+    } finally {
+      await rm(dshHome, { recursive: true, force: true })
+    }
+  })
+
+  it('stores generic files under the v2 root and enforces the public batch limits', async () => {
+    const dshHome = await mkdtemp(join(tmpdir(), 'dsh-file-attachment-service-'))
+    try {
+      const service = new LocalAttachmentStore(new Context(), { dshHome, maxFileBytes: 3, maxFilesPerMessage: 1, maxMessageFileBytes: 10 })
+      const [ref] = await service.saveFiles([{ data: Uint8Array.of(1, 2, 3), name: 'report.txt' }])
+      expect(service.fileRoot).toBe(join(dshHome, 'attachments', 'v2'))
+      expect(existsSync(join(service.fileRoot, 'files', String(ref.attachmentId).slice(7, 9), String(ref.attachmentId).slice(7)))).toBe(true)
+      await expect(service.readFile(ref!)).resolves.toEqual({ ref, data: Uint8Array.of(1, 2, 3) })
+      await expect(service.saveFiles([{ data: Uint8Array.of(1, 2, 3, 4) }])).rejects.toMatchObject({ code: 'FILE_TOO_LARGE' })
+      await expect(service.saveFiles([{ data: Uint8Array.of(1) }, { data: Uint8Array.of(2) }])).rejects.toMatchObject({ code: 'TOO_MANY_FILES' })
+
+      const totalLimited = new LocalAttachmentStore(new Context(), {
+        dshHome, maxFileBytes: 3, maxFilesPerMessage: 3, maxMessageFileBytes: 3,
+      })
+      await expect(totalLimited.saveFiles([{ data: Uint8Array.of(1, 2) }, { data: Uint8Array.of(3, 4) }]))
+        .rejects.toMatchObject({ code: 'FILES_TOO_LARGE' })
     } finally {
       await rm(dshHome, { recursive: true, force: true })
     }
