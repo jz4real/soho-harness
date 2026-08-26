@@ -77,10 +77,10 @@ describe('local attachment service', () => {
     const dshHome = await mkdtemp(join(tmpdir(), 'dsh-file-attachment-service-'))
     try {
       const service = new LocalAttachmentStore(new Context(), { dshHome, maxFileBytes: 3, maxFilesPerMessage: 1, maxMessageFileBytes: 10 })
-      const [ref] = await service.saveFiles([{ data: Uint8Array.of(1, 2, 3), name: 'report.txt' }])
+      const ref = (await service.saveFiles([{ data: Uint8Array.of(1, 2, 3), name: 'report.txt' }]))[0]!
       expect(service.fileRoot).toBe(join(dshHome, 'attachments', 'v2'))
       expect(existsSync(join(service.fileRoot, 'files', String(ref.attachmentId).slice(7, 9), String(ref.attachmentId).slice(7)))).toBe(true)
-      await expect(service.readFile(ref!)).resolves.toEqual({ ref, data: Uint8Array.of(1, 2, 3) })
+      await expect(service.readFile(ref)).resolves.toEqual({ ref, data: Uint8Array.of(1, 2, 3) })
       await expect(service.saveFiles([{ data: Uint8Array.of(1, 2, 3, 4) }])).rejects.toMatchObject({ code: 'FILE_TOO_LARGE' })
       await expect(service.saveFiles([{ data: Uint8Array.of(1) }, { data: Uint8Array.of(2) }])).rejects.toMatchObject({ code: 'TOO_MANY_FILES' })
 

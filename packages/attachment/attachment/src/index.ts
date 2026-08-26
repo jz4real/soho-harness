@@ -18,9 +18,10 @@ import type {
 export { AttachmentId, ImageVariantId } from './brand.ts'
 export { AttachmentError, isFileAdmissionError, isImageAdmissionError } from './error.ts'
 export type { AttachmentErrorCode, FileAdmissionErrorCode, ImageAdmissionErrorCode } from './error.ts'
-export { admitEncodedImages } from './admission.ts'
+export { admitEncodedImages, decodeEncodedFiles } from './admission.ts'
 export type {
   AttachmentId as AttachmentIdType,
+  EncodedFileAttachment,
   EncodedImageAttachment,
   FileAttachmentLimits,
   FileAttachmentRef,

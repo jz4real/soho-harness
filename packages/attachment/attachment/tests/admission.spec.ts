@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
-import { admitEncodedImages } from '@deepseek-ai/dsh-attachment'
+import { admitEncodedImages, decodeEncodedFiles } from '@deepseek-ai/dsh-attachment'
 import type { ImageAttachmentRef, SaveImageAttachment } from '@deepseek-ai/dsh-attachment/types'
 
 const PNG = 'AAAA' // canonical base64, 3 bytes
@@ -62,5 +62,32 @@ describe('admitEncodedImages', () => {
     const refused = Object.assign(new Error('Image batch exceeds the configured image-count limit.'), { code: 'TOO_MANY_IMAGES' })
     mocks.saveImages.mockRejectedValueOnce(refused)
     await expect(admitEncodedImages(store, [{ mediaType: 'image/png', data: PNG }])).rejects.toBe(refused)
+  })
+})
+
+describe('decodeEncodedFiles', () => {
+  it('decodes a canonical ordered batch for storage and extraction', () => {
+    expect(decodeEncodedFiles([
+      { mediaType: 'text/plain', data: 'YQ==', name: 'a.txt' },
+      { mediaType: 'application/octet-stream', data: 'AAE=' },
+    ])).toEqual([
+      { mediaType: 'text/plain', data: new Uint8Array([97]), name: 'a.txt' },
+      { mediaType: 'application/octet-stream', data: new Uint8Array([0, 1]) },
+    ])
+  })
+
+  it.each(['', 'YQ', 'not-base64!!'])(
+    'rejects non-canonical payload %j',
+    (data) => {
+      expect(() => decodeEncodedFiles([{ mediaType: 'text/plain', data }]))
+        .toThrow(expect.objectContaining({ name: 'AttachmentError', code: 'INVALID_FILE_BASE64' }))
+    },
+  )
+
+  it('validates the whole batch before callers can persist any member', () => {
+    expect(() => decodeEncodedFiles([
+      { mediaType: 'text/plain', data: 'YQ==' },
+      { mediaType: 'text/plain', data: '!!!!' },
+    ])).toThrow(expect.objectContaining({ code: 'INVALID_FILE_BASE64' }))
   })
 })

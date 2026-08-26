@@ -88,6 +88,16 @@ export interface SaveFileAttachment {
   name?: string
 }
 
+/** Base64-encoded generic file upload accompanying one wire request. */
+export interface EncodedFileAttachment {
+  /** Canonical base64 encoding of the original file bytes. */
+  data: string
+  /** Optional browser/provider media type; it is never interpreted as a path. */
+  mediaType?: string
+  /** Optional display name; it is never interpreted as a path. */
+  name?: string
+}
+
 /** Stored original file bytes returned after reference and digest verification. */
 export interface StoredFileAttachment {
   ref: FileAttachmentRef

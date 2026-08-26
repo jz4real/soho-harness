@@ -12,8 +12,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type { Agent, ModelSelection, ModelSelectionRef, AgentOptions, AgentStatus } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-presets/types'
-import { AttachmentError, admitEncodedImages } from '@deepseek-ai/dsh-attachment'
-import type { FileAttachmentRef, ImageAttachmentRef, SaveFileAttachment } from '@deepseek-ai/dsh-attachment'
+import { AttachmentError, admitEncodedImages, decodeEncodedFiles } from '@deepseek-ai/dsh-attachment'
+import type { FileAttachmentRef, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { extractFileText } from '@deepseek-ai/dsh-attachment-local'
 import { createUserMessage, freezeMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { errorChain } from '@deepseek-ai/dsh-llm'
@@ -111,6 +111,7 @@ import {
   inspectApiRemoteSession,
 } from '@deepseek-ai/dsh-api-remotes'
 import { canOpenNativePath, openNativePath, openNativeTextFile } from './native-path-opener.ts'
+import { extractedFileContexts } from './file-context.ts'
 
 /** Page size when history is called without maxMessages. */
 const DEFAULT_MAX_MESSAGES = 50
@@ -129,43 +130,6 @@ const MESSAGE_TYPES = new Set(['user/message', 'assistant/message'])
 /** Maximum locally extracted file text admitted into one user message. */
 const MAX_MESSAGE_EXTRACTED_FILE_TEXT_CODE_POINTS = 160_000
 
-/** Return at most `limit` Unicode code points without splitting a surrogate pair. */
-function takeCodePoints(value: string, limit: number): { text: string; truncated: boolean; count: number } {
-  let count = 0
-  let end = 0
-  for (const point of value) {
-    if (count === limit) return { text: value.slice(0, end), truncated: true, count }
-    count += 1
-    end += point.length
-  }
-  return { text: value, truncated: false, count }
-}
-
-/** Model-visible local extraction paired with one durable file reference. */
-function extractedFileText(
-  ref: FileAttachmentRef,
-  extracted: Awaited<ReturnType<typeof extractFileText>>,
-  remaining: { codePoints: number },
-): string {
-  const name = ref.name ?? 'unnamed file'
-  if (extracted.status === 'unavailable') {
-    return `[File: ${name}]\n[Local text extraction unavailable; file contents were not read.]`
-  }
-  const admitted = takeCodePoints(extracted.text, remaining.codePoints)
-  remaining.codePoints -= admitted.count
-  const truncated = extracted.truncated || admitted.truncated
-  return `[File: ${name}]\n${admitted.text}${truncated ? '\n[Local text extraction truncated.]' : ''}`
-}
-
-/** Decode the browser wire form for generic-file storage and local extraction. */
-function decodedFile(part: Extract<PromptContentPart, { type: 'file' }>): SaveFileAttachment {
-  return {
-    data: new Uint8Array(Buffer.from(part.data, 'base64')),
-    mediaType: part.mediaType,
-    ...part.name === undefined ? {} : { name: part.name },
-  }
-}
-
 /** Admit binary prompt parts before constructing their ordered durable content. */
 async function durablePromptContent(ctx: Context, content: readonly PromptContentPart[]): Promise<ContentBlock[]> {
   if (content.every(part => part.type === 'text')) {
@@ -173,12 +137,16 @@ async function durablePromptContent(ctx: Context, content: readonly PromptConten
   }
   const images = content.filter(part => part.type === 'image')
   const imageRefs = images.length === 0 ? [] : await admitEncodedImages(ctx.attachments, images)
-  const fileInputs = content.filter((part): part is Extract<PromptContentPart, { type: 'file' }> => (
+  const fileParts = content.filter((part): part is Extract<PromptContentPart, { type: 'file' }> => (
     part.type === 'file'
-  )).map(decodedFile)
+  ))
+  const fileInputs = decodeEncodedFiles(fileParts)
   const fileRefs = fileInputs.length === 0 ? [] : await ctx.attachments.saveFiles(fileInputs)
   const extractedFiles = await Promise.all(fileInputs.map(extractFileText))
-  const remaining = { codePoints: MAX_MESSAGE_EXTRACTED_FILE_TEXT_CODE_POINTS }
+  const fileContexts = extractedFileContexts(fileRefs.map((ref, index) => ({
+    name: ref.name ?? 'unnamed file',
+    extracted: extractedFiles[index] as Awaited<ReturnType<typeof extractFileText>>,
+  })), MAX_MESSAGE_EXTRACTED_FILE_TEXT_CODE_POINTS)
   const durable: ContentBlock[] = []
   let nextImage = 0
   let nextFile = 0
@@ -190,9 +158,8 @@ async function durablePromptContent(ctx: Context, content: readonly PromptConten
       durable.push({ type: 'image', attachment: imageRefs[nextImage++] as ImageAttachmentRef })
     } else {
       const attachment = fileRefs[nextFile] as FileAttachmentRef
-      const extracted = extractedFiles[nextFile] as Awaited<ReturnType<typeof extractFileText>>
       durable.push({ type: 'file', attachment })
-      durable.push({ type: 'text', text: extractedFileText(attachment, extracted, remaining) })
+      durable.push({ type: 'text', text: fileContexts[nextFile] as string })
       nextFile += 1
     }
   }

@@ -4,6 +4,7 @@ import AttachmentStore, {
   AttachmentError,
   AttachmentId,
   ImageVariantId,
+  isFileAdmissionError,
   isImageAdmissionError,
   type ImageAttachmentRef,
   type ImageMediaType,
@@ -157,5 +158,12 @@ describe('isImageAdmissionError', () => {
     expect(isImageAdmissionError(new AttachmentError('corrupt object', 'ATTACHMENT_CORRUPT'))).toBe(false)
     expect(isImageAdmissionError(new AttachmentError('disk failed', 'ATTACHMENT_WRITE_FAILED'))).toBe(false)
     expect(isImageAdmissionError(new Error('unknown failure'))).toBe(false)
+  })
+})
+
+describe('isFileAdmissionError', () => {
+  it('recognizes canonical-base64 admission failures as caller-correctable', () => {
+    expect(isFileAdmissionError(new AttachmentError('bad base64', 'INVALID_FILE_BASE64'))).toBe(true)
+    expect(isFileAdmissionError(new AttachmentError('disk failed', 'ATTACHMENT_WRITE_FAILED'))).toBe(false)
   })
 })

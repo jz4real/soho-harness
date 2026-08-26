@@ -52,7 +52,7 @@ async function harness(): Promise<{
     Promise.resolve(inputs.map(fileRef))
   ))
   const saveImages = vi.fn((inputs: readonly SaveImageAttachment[]) => Promise.resolve(inputs.map((input, index) => ({
-    attachmentId: `image-${String(index)}`,
+    attachmentId: `image-${String(index)}` as ImageAttachmentRef['attachmentId'],
     mediaType: input.mediaType,
     bytes: input.data.byteLength,
     width: 1,
@@ -173,6 +173,65 @@ describe('session prompt file admission', () => {
         text: '[File: broken.pdf]\n[Local text extraction unavailable; file contents were not read.]',
       },
     ])
+    await ctx.fiber.dispose()
+  })
+
+  it.each(['', 'YQ', 'not-base64!!'])(
+    'rejects non-canonical file base64 %j before storage or followup',
+    async (data) => {
+      const { ctx, sessionId, followup, saveFiles } = await harness()
+      const api = createApiProxy(ctx, {
+        defaultModelSelection: () => ({ provider: 'test', model: 'model' }),
+        cwd: '/tmp',
+      })
+
+      const result = await api.sessions.prompt(request({
+        sessionId,
+        mode: 'queue' as const,
+        content: [{ type: 'file' as const, mediaType: 'text/plain', data, name: 'bad.txt' }],
+      }))
+
+      expect(result.result).toMatchObject({
+        ok: false,
+        error: { code: 'attachment-error', details: { reason: 'INVALID_FILE_BASE64' } },
+      })
+      expect(saveFiles).not.toHaveBeenCalled()
+      expect(followup).not.toHaveBeenCalled()
+      await ctx.fiber.dispose()
+    },
+  )
+
+  it('caps the complete emitted Unicode file context at exactly 160,000 code points', async () => {
+    const { ctx, sessionId, followup } = await harness()
+    const api = createApiProxy(ctx, {
+      defaultModelSelection: () => ({ provider: 'test', model: 'model' }),
+      cwd: '/tmp',
+    })
+    const files = [
+      { text: '😀'.repeat(60_000), name: '一😀.txt' },
+      { text: '甲'.repeat(60_000), name: '二.txt' },
+      { text: '乙'.repeat(60_000), name: '三.txt' },
+    ]
+
+    await expect(api.sessions.prompt(request({
+      sessionId,
+      mode: 'queue' as const,
+      content: files.map(file => ({
+        type: 'file' as const,
+        mediaType: 'text/plain',
+        data: Buffer.from(file.text).toString('base64'),
+        name: file.name,
+      })),
+    }))).resolves.toMatchObject({ result: { ok: true } })
+
+    const content = (followup.mock.calls[0]?.[0] as UserMessage).content
+    const contexts = content.filter(block => block.type === 'text').map(block => block.text)
+    expect(contexts).toHaveLength(3)
+    expect(contexts.map(value => value.split('\n', 1)[0])).toEqual([
+      '[File: 一😀.txt]', '[File: 二.txt]', '[File: 三.txt]',
+    ])
+    expect(contexts.reduce((total, value) => total + Array.from(value).length, 0)).toBe(160_000)
+    expect(contexts[2]).toMatch(/\n\[Local text extraction truncated\.\]$/)
     await ctx.fiber.dispose()
   })
 })

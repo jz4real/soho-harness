@@ -16,6 +16,7 @@ const FILE_ADMISSION_ERROR_CODES = [
   'TOO_MANY_FILES',
   'FILES_TOO_LARGE',
   'FILE_TOO_LARGE',
+  'INVALID_FILE_BASE64',
 ] as const
 
 /** Caller-correctable attachment failure codes raised while admitting image input. */

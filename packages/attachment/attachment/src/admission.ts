@@ -3,13 +3,23 @@
 import { Buffer } from 'node:buffer'
 import { AttachmentError } from './error.ts'
 import type { AttachmentStore } from './index.ts'
-import type { EncodedImageAttachment, ImageAttachmentRef, SaveImageAttachment } from './types.ts'
+import type {
+  EncodedFileAttachment,
+  EncodedImageAttachment,
+  ImageAttachmentRef,
+  SaveFileAttachment,
+  SaveImageAttachment,
+} from './types.ts'
 
 /** Decode one upload payload while rejecting non-canonical base64 forms. */
-function decodeBase64(data: string): Uint8Array {
+function decodeBase64(
+  data: string,
+  kind: 'Image' | 'File',
+  code: 'INVALID_IMAGE_BASE64' | 'INVALID_FILE_BASE64',
+): Uint8Array {
   const decoded = Buffer.from(data, 'base64')
   if (data.length === 0 || decoded.toString('base64') !== data) {
-    throw new AttachmentError('Image upload is not canonical base64.', 'INVALID_IMAGE_BASE64')
+    throw new AttachmentError(`${kind} upload is not canonical base64.`, code)
   }
   return new Uint8Array(decoded)
 }
@@ -17,10 +27,28 @@ function decodeBase64(data: string): Uint8Array {
 /** Store input for one decoded upload. */
 function saveInput(image: EncodedImageAttachment): SaveImageAttachment {
   return {
-    data: decodeBase64(image.data),
+    data: decodeBase64(image.data, 'Image', 'INVALID_IMAGE_BASE64'),
     mediaType: image.mediaType,
     ...image.name === undefined ? {} : { name: image.name },
   }
+}
+
+/**
+ * Strictly decode one complete generic-file wire batch before persistence.
+ * Mapping the entire batch first ensures a malformed later member cannot
+ * follow an earlier store write.
+ * @param files - base64-encoded uploads in caller order.
+ * @returns decoded storage/extraction inputs in the same order.
+ * @throws AttachmentError when any member is empty or non-canonical base64.
+ */
+export function decodeEncodedFiles(
+  files: readonly EncodedFileAttachment[],
+): readonly SaveFileAttachment[] {
+  return files.map(file => ({
+    data: decodeBase64(file.data, 'File', 'INVALID_FILE_BASE64'),
+    ...file.mediaType === undefined ? {} : { mediaType: file.mediaType },
+    ...file.name === undefined ? {} : { name: file.name },
+  }))
 }
 
 /**
