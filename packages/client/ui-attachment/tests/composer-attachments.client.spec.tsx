@@ -1,11 +1,52 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
+import type { ISession, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
+import { SlotTestRuntime, stubSettingsScope, usePinnedBrowserLanguages } from '@deepseek-ai/dsh-client-test-runtime'
+import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
 import type {
   ComposerAttachment, ComposerAttachmentsOwnerProps, ComposerAttachmentsProps,
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import {
+  apply as applyConversation, inject as conversationInject,
+} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { ComposerAttachments } from '../src/client/ComposerAttachments.tsx'
+import { apply as applyAttachments, inject as attachmentInject } from '../src/client/index.ts'
+
+usePinnedBrowserLanguages('zh-CN')
+
+const SID = 's1' as SessionId
+
+type AppRootProps = PropsRenderSlots<'conversation' | 'details'>
+function AppRoot({ renderSlot }: AppRootProps) {
+  return <>{renderSlot('conversation', {})}</>
+}
+
+async function assembledBench() {
+  const runtime = await SlotTestRuntime.create()
+  runtime.provide('connection', { api: { settings: {} }, isLoopback: false })
+  runtime.provide('remote', { $on: () => () => {} })
+  runtime.provide('settingsScope', { bind: () => stubSettingsScope().scope } as never)
+  runtime.provide('layout', { openDetails: vi.fn(), closeDetails: vi.fn() })
+  const locale = new LocaleRuntime(runtime.ctx)
+  runtime.provide('locale', locale)
+  runtime.slots.installLocale(locale)
+  const prompt = vi.fn<ISession['prompt']>(async () => ({ ok: true, value: { accepted: true } }))
+  await runtime.sessions.add({
+    id: SID,
+    summary: { title: 'S', displayTitle: 'S', cwd: '/proj' },
+    session: { prompt, loadOlder: vi.fn<ISession['loadOlder']>() },
+  })
+  await runtime.root.declare({
+    'conversation': { kind: 'single', scope: 'session-maybe' },
+    'details': { kind: 'single', scope: 'session' },
+  }, AppRoot)
+  await runtime.mount({ inject: [...conversationInject], apply: applyConversation })
+  await runtime.mount({ inject: [...attachmentInject], apply: applyAttachments })
+  return { runtime, prompt, view: runtime.renderRoot() }
+}
 
 beforeEach(() => {
   vi.stubGlobal('ResizeObserver', class {
@@ -87,12 +128,74 @@ function props(overrides: Partial<ComposerAttachmentsOwnerProps> = {}): Composer
   } as unknown as ComposerAttachmentsProps
 }
 
+describe('assembled composer attachment intake', () => {
+  it('turns a native-picker CSV into a real card and submitted file prompt part', async () => {
+    const { runtime, prompt, view } = await assembledBench()
+    try {
+      const picker = view.container.querySelector<HTMLInputElement>('input[type="file"]')
+      if (picker === null) throw new Error('attachment picker missing')
+      const csv = new File(['a,b'], 'scores.csv', { type: 'text/csv' })
+
+      fireEvent.change(picker, { target: { files: [csv] } })
+      await waitFor(() => {
+        expect(view.getByRole('listitem', {
+          name: 'CSV，scores.csv，3 B，已准备发送',
+        })).toBeTruthy()
+      })
+
+      fireEvent.change(view.container.querySelector('textarea')!, { target: { value: 'inspect scores' } })
+      fireEvent.click(view.getByRole('button', { name: '发送消息' }))
+      await waitFor(() => { expect(prompt).toHaveBeenCalledOnce() })
+      expect(prompt).toHaveBeenCalledWith([
+        { type: 'file', mediaType: 'text/csv', data: 'YSxi', name: 'scores.csv' },
+        { type: 'text', text: 'inspect scores' },
+      ], 'queue', expect.any(AbortSignal))
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  it('turns a document drop into a real draft whose removal excludes it from submit', async () => {
+    const { runtime, prompt, view } = await assembledBench()
+    try {
+      const csv = new File(['x,y'], 'removed.csv', { type: 'text/csv' })
+      const dataTransfer = { types: ['Files'], files: [csv], dropEffect: 'none' }
+
+      fireEvent.dragEnter(document.body, { dataTransfer })
+      fireEvent.drop(document.body, { dataTransfer })
+      await waitFor(() => {
+        expect(view.getByRole('listitem', {
+          name: 'CSV，removed.csv，3 B，已准备发送',
+        })).toBeTruthy()
+      })
+
+      fireEvent.click(view.getByRole('button', { name: '移除文件 removed.csv' }))
+      await waitFor(() => {
+        expect(view.queryByRole('listitem', {
+          name: 'CSV，removed.csv，3 B，已准备发送',
+        })).toBeNull()
+      })
+      fireEvent.change(view.container.querySelector('textarea')!, { target: { value: 'after removal' } })
+      fireEvent.click(view.getByRole('button', { name: '发送消息' }))
+      await waitFor(() => { expect(prompt).toHaveBeenCalledOnce() })
+      expect(prompt).toHaveBeenCalledWith([
+        { type: 'text', text: 'after removal' },
+      ], 'queue', expect.any(AbortSignal))
+    } finally {
+      await runtime.dispose()
+    }
+  })
+})
+
 describe('ComposerAttachments', () => {
   it('accepts file drops anywhere on the document and keeps non-file drags native', () => {
     const onAddAttachments = vi.fn()
     const view = render(<ComposerAttachments {...props({
       onAddAttachments,
-      dropLimits: { count: 20, size: '5MB' },
+      dropLimits: {
+        files: { count: 10, size: '20MB', total: '50MB' },
+        images: { count: 20, size: '5MB', total: '100MB' },
+      },
     })} />)
 
     expect(fireEvent.dragEnter(document.body, { dataTransfer: null })).toBe(true)
@@ -106,7 +209,8 @@ describe('ComposerAttachments', () => {
     const dataTransfer = { types: ['Files'], files: [image], dropEffect: 'none' }
     expect(fireEvent.dragEnter(document.body, { dataTransfer })).toBe(false)
     expect(view.getByRole('status').textContent).toContain('文件或图片拖动到此处即可添加')
-    expect(view.getByRole('status').textContent).toContain('最多 20 张，每张 5MB')
+    expect(view.getByRole('status').textContent).toContain('文件最多 10 个，单个 20MB，总计 50MB')
+    expect(view.getByRole('status').textContent).toContain('图片最多 20 张，单张 5MB，总计 100MB')
     expect(fireEvent.dragOver(document.body, { dataTransfer })).toBe(false)
     expect(dataTransfer.dropEffect).toBe('copy')
     expect(fireEvent.drop(document.body, { dataTransfer })).toBe(false)
@@ -210,7 +314,14 @@ describe('ComposerAttachments', () => {
     expect(onRemoveAttachment).toHaveBeenCalledWith(file.id)
   })
 
-  it('groups multiple file cards for the responsive two-to-one-column layout', () => {
+  it('switches the deterministic card-layout contract across the 520px boundary', () => {
+    let resize: ResizeObserverCallback | undefined
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: ResizeObserverCallback) { resize = callback }
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    })
     const one = genericAttachment('one')
     const two = genericAttachment('two')
     Object.defineProperty(one.file, 'size', { value: 1024 })
@@ -222,6 +333,19 @@ describe('ComposerAttachments', () => {
     expect(view.getAllByRole('listitem')).toHaveLength(2)
     expect(view.getByText('1 KB')).toBeTruthy()
     expect(view.getByText('1.5 KB')).toBeTruthy()
+    const layout = view.container.querySelector<HTMLElement>('[data-file-columns]')
+    expect(layout?.dataset.fileColumns).toBe('2')
+    if (layout === null || resize === undefined) throw new Error('responsive card observer missing')
+
+    act(() => {
+      resize?.([{ target: layout, contentRect: { width: 500 } } as unknown as ResizeObserverEntry], {} as ResizeObserver)
+    })
+    expect(layout.dataset.fileColumns).toBe('1')
+
+    act(() => {
+      resize?.([{ target: layout, contentRect: { width: 600 } } as unknown as ResizeObserverEntry], {} as ResizeObserver)
+    })
+    expect(layout.dataset.fileColumns).toBe('2')
   })
 
   it('localizes file-card and drop affordances in English', () => {
@@ -230,6 +354,9 @@ describe('ComposerAttachments', () => {
     const view = render(<ComposerAttachments {...props({ attachments: [file], t: enT })} />)
 
     expect(view.getByRole('list', { name: 'Files ready to send' })).toBeTruthy()
+    expect(view.getByRole('listitem', {
+      name: 'CSV, Unnamed file, 1 MB, Ready to send',
+    })).toBeTruthy()
     expect(view.getByText('Unnamed file')).toBeTruthy()
     expect(view.getByText('1 MB')).toBeTruthy()
     expect(view.getByText('Ready to send')).toBeTruthy()

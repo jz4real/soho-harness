@@ -108,6 +108,10 @@
   }
 }
 
+.attachments[data-file-columns='1'] .cards {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 @media (pointer: coarse) {
   .remove {
     width: 28px;

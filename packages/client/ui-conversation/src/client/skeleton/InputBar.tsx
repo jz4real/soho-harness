@@ -777,9 +777,17 @@ export function InputBar({
           canAcceptDrop,
           onAddAttachments: intakeAttachments,
           onRemoveAttachment: (id) => { removeImage?.(id) },
-          dropLimits: imageLimits === undefined ? undefined : {
-            count: imageLimits.maxImagesPerMessage,
-            size: imageSizeText(imageLimits.maxImageBytes),
+          dropLimits: {
+            files: {
+              count: MAX_FILES_PER_MESSAGE,
+              size: imageSizeText(MAX_FILE_BYTES),
+              total: imageSizeText(MAX_MESSAGE_FILE_BYTES),
+            },
+            ...(imageLimits === undefined ? {} : { images: {
+              count: imageLimits.maxImagesPerMessage,
+              size: imageSizeText(imageLimits.maxImageBytes),
+              total: imageSizeText(imageLimits.maxMessageImageBytes),
+            } }),
           },
         })}
         {/* One scrollport, two text layers. The hidden mirror renders draft+'\n' and stretches the

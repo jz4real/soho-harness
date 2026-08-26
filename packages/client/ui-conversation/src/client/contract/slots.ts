@@ -55,8 +55,11 @@ export interface ComposerAttachmentsOwnerProps {
   onAddAttachments: (files: readonly File[]) => void
   /** Remove one draft attachment through the conversation service. */
   onRemoveAttachment: (id: DraftAttachmentId) => void
-  /** Display-ready limits for the drop invitation. */
-  dropLimits?: { readonly count: number; readonly size: string } | undefined
+  /** Display-ready generic-file policy and optional model image policy for the drop invitation. */
+  dropLimits?: {
+    readonly files: { readonly count: number; readonly size: string; readonly total: string }
+    readonly images?: { readonly count: number; readonly size: string; readonly total: string } | undefined
+  } | undefined
 }
 
 /** Historical image group handed to the optional attachment presentation plugin. */

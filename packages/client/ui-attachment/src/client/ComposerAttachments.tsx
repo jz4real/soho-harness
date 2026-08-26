@@ -34,7 +34,9 @@ export function ComposerAttachments({
 }: ComposerAttachmentsProps) {
   const [preview, setPreview] = useState<ComposerImageAttachment | null>(null)
   const [dragActive, setDragActive] = useState(false)
+  const [fileColumns, setFileColumns] = useState<1 | 2>(2)
   const dragDepth = useRef(0)
+  const attachmentsRef = useRef<HTMLDivElement | null>(null)
   const closePreview = useCallback(() => { setPreview(null) }, [])
 
   useEffect(() => {
@@ -100,6 +102,17 @@ export function ComposerAttachments({
     () => attachments.filter((attachment): attachment is ComposerFileAttachment => attachment.kind === 'file'),
     [attachments],
   )
+  const hasFiles = files.length > 0
+  useEffect(() => {
+    const element = attachmentsRef.current
+    if (element === null || !hasFiles) return
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width
+      if (width !== undefined) setFileColumns(width <= 520 ? 1 : 2)
+    })
+    observer.observe(element)
+    return () => { observer.disconnect() }
+  }, [hasFiles])
   const railItems = useMemo<ComposerRailItem[]>(() => images.map(attachment => ({
     id: attachment.id,
     previewUrl: attachment.previewUrl,
@@ -118,18 +131,25 @@ export function ComposerAttachments({
         />
       )}
       {(files.length > 0 || railItems.length > 0) && (
-        <div className={css.attachments}>
+        <div ref={attachmentsRef} className={css.attachments} data-file-columns={fileColumns}>
           {files.length > 0 && (
             <div className={css.cards} role="list" aria-label={fileLabels.group}>
               {files.map((attachment) => {
                 const name = attachment.file.name || fileLabels.unnamed
+                const type = attachment.fileType.toUpperCase()
+                const size = humanFileSize(attachment.file.size)
                 return (
-                  <div key={attachment.id} className={css.card} role="listitem">
-                    <span className={css.badge} aria-hidden>{attachment.fileType.toUpperCase()}</span>
+                  <div
+                    key={attachment.id}
+                    className={css.card}
+                    role="listitem"
+                    aria-label={fileLabels.card(type, name, size)}
+                  >
+                    <span className={css.badge}>{type}</span>
                     <span className={css.details}>
                       <span className={css.filename} title={name}>{name}</span>
                       <span className={css.meta}>
-                        <span>{humanFileSize(attachment.file.size)}</span>
+                        <span>{size}</span>
                         <span aria-hidden>·</span>
                         <span className={css.ready}>{fileLabels.ready}</span>
                       </span>

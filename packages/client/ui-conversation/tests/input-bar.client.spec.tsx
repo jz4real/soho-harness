@@ -386,7 +386,7 @@ describe('attachment drafts', () => {
     expect(overTotal.props.addImages).not.toHaveBeenCalled()
   })
 
-  it('projects display-ready limits into the attachment slot', () => {
+  it('projects distinct generic-file and image policies into the attachment slot', () => {
     const result = bench({
       addImages: vi.fn(() => null),
       imageLimits: {
@@ -398,7 +398,10 @@ describe('attachment drafts', () => {
         mediaTypes: ['image/png'] as const,
       },
     })
-    expect(attachmentOwner(result.slotCalls).dropLimits).toEqual({ count: 20, size: '5MB' })
+    expect(attachmentOwner(result.slotCalls).dropLimits).toEqual({
+      files: { count: 10, size: '20MB', total: '50MB' },
+      images: { count: 20, size: '5MB', total: '100MB' },
+    })
   })
 
   it('announces server attachment rejections as product copy, other codes as developer text', () => {
