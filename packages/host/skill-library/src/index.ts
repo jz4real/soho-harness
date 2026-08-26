@@ -1,4 +1,4 @@
-import { readdir, readFile } from 'node:fs/promises'
+import { cp, mkdir, readdir, readFile, rename, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 
 export type SkillLibrarySource = 'user' | 'built-in'
@@ -23,6 +23,30 @@ export async function listSkillLibrary(roots: SkillLibraryRoots): Promise<readon
     listRoot(roots.bundledRoot, 'built-in', 'read-only'),
   ])
   return [...user, ...bundled]
+}
+
+/** Copy one validated local skill directory into the DSH user skill root. */
+export async function importSkillFolder(sourceDirectory: string, userRoot: string): Promise<SkillLibraryEntry> {
+  const sourcePath = join(sourceDirectory, 'SKILL.md')
+  const frontmatter = readFrontmatter(await readFile(sourcePath, 'utf8'))
+  if (frontmatter === undefined) throw new TypeError('skill import requires a valid SKILL.md frontmatter block')
+  await mkdir(userRoot, { recursive: true })
+  const destination = join(userRoot, frontmatter.name)
+  try {
+    await stat(destination)
+    throw new Error(`skill "${frontmatter.name}" already exists`)
+  } catch (error: unknown) {
+    if (!isMissing(error)) throw error
+  }
+  const staged = join(userRoot, `.${frontmatter.name}.import-${Date.now()}`)
+  try {
+    await cp(sourceDirectory, staged, { recursive: true, errorOnExist: true, verbatimSymlinks: true })
+    await rename(staged, destination)
+  } catch (error) {
+    await rm(staged, { recursive: true, force: true })
+    throw error
+  }
+  return { ...frontmatter, source: 'user', status: 'enabled', path: join(destination, 'SKILL.md') }
 }
 
 async function listRoot(
