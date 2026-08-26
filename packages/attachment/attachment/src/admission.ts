@@ -39,7 +39,8 @@ function saveInput(image: EncodedImageAttachment): SaveImageAttachment {
  * follow an earlier store write.
  * @param files - base64-encoded uploads in caller order.
  * @returns decoded storage/extraction inputs in the same order.
- * @throws AttachmentError when any member is empty or non-canonical base64.
+ * @throws AttachmentError when any member is non-canonical base64. The empty
+ * string is canonical base64 for a valid zero-byte generic file.
  */
 export function decodeEncodedFiles(
   files: readonly EncodedFileAttachment[],
