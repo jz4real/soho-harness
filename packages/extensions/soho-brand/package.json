@@ -1,0 +1,46 @@
+{
+  "name": "@soho/dsh-brand-plugin",
+  "version": "0.2.1",
+  "description": "苏豪控股品牌定制插件：替换 DeepSeek Harness Web 的 Logo/字标（小鲸鱼 → 自定义图标、DeepSeek → 自定义品牌名），并把品牌蓝主题换成淡金色。Logo 与文字均可通过 profile 配置覆盖，无需修改任何源码。",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "brand",
+    "theme",
+    "苏豪控股"
+  ],
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/types/client/index.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-theme"
+      ],
+      "platform": "web"
+    }
+  },
+  "files": [
+    "lib",
+    "README.md",
+    "LICENSE",
+    "assets"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-theme": "^0.1.0-rc.6"
+  },
+  "license": "MIT"
+}

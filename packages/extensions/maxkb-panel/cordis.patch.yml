@@ -1,0 +1,3 @@
+- insert:
+    - id: soho-maxkb-panel
+      name: '@soho/dsh-maxkb-panel'

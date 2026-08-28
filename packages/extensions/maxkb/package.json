@@ -1,0 +1,16 @@
+{
+  "name": "@soho/dsh-maxkb",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MaxKB administration tools for Soho Harness",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": ["src"],
+  "scripts": {
+    "test": "node --test"
+  }
+}

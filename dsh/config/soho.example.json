@@ -1,0 +1,5 @@
+{
+  "dshWebPort": 3080,
+  "maxkbPort": 8080,
+  "startMaxKB": true
+}

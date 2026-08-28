@@ -1,0 +1,13 @@
+services:
+  maxkb:
+    image: ${MAXKB_IMAGE:-registry.fit2cloud.com/maxkb/maxkb@sha256:6edd14dafdc33c885487321d5a038a36b2539a6cfdb12074b456f5bd5013e931}
+    ports:
+      - "127.0.0.1:${MAXKB_PORT:-8080}:8080"
+    restart: unless-stopped
+    volumes:
+      - maxkb-data:/opt/maxkb
+      - maxkb-postgres:/var/lib/postgresql/data
+
+volumes:
+  maxkb-data:
+  maxkb-postgres:

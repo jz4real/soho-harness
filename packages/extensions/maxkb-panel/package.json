@@ -1,0 +1,24 @@
+{
+  "name": "@soho/dsh-maxkb-panel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Dedicated trusted local MaxKB panel for Soho Harness",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./client": "./src/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": ["src", "cordis.patch.yml"],
+  "scripts": {
+    "test": "node --test"
+  },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "inject": ["@deepseek-ai/dsh-client-runtime"]
+    }
+  }
+}
