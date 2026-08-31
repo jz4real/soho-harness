@@ -1,6 +1,19 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
+import { resolvePanelConfig } from '../src/index.js'
+
+test('inherits the launcher MaxKB URL when the panel has no explicit address', () => {
+  const previous = process.env.MAXKB_BASE_URL
+  process.env.MAXKB_BASE_URL = 'http://127.0.0.1:18080/'
+  try {
+    assert.equal(resolvePanelConfig().baseUrl, 'http://127.0.0.1:18080')
+    assert.equal(resolvePanelConfig({ baseUrl: 'http://127.0.0.1:19090/' }).baseUrl, 'http://127.0.0.1:19090')
+  } finally {
+    if (previous === undefined) delete process.env.MAXKB_BASE_URL
+    else process.env.MAXKB_BASE_URL = previous
+  }
+})
 
 test('registers a resizable MaxKB workbench without overriding the DSH root width', async () => {
   const clientSource = await readFile(new URL('../src/client.js', import.meta.url), 'utf8')

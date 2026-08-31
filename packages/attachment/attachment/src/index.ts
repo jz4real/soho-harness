@@ -140,7 +140,11 @@ export abstract class AttachmentStore extends Service {
     }
   }
 
-  /** Validate and durably commit an ordered generic-file batch. */
+  /**
+   * Validate and durably commit an ordered generic-file batch.
+   * @param inputs - original file bytes and optional metadata, in message order.
+   * @returns durable file references in the same order as `inputs`.
+   */
   async saveFiles(inputs: readonly SaveFileAttachment[]): Promise<readonly FileAttachmentRef[]> {
     this.validateFileBatch(inputs)
     const refs: FileAttachmentRef[] = []
@@ -148,7 +152,11 @@ export abstract class AttachmentStore extends Service {
     return refs
   }
 
-  /** Persist one generic file, retaining its original bytes. */
+  /**
+   * Persist one generic file, retaining its original bytes.
+   * @param _input - original file bytes and optional metadata to persist.
+   * @returns a rejected promise when the mounted provider does not support generic files.
+   */
   saveFile(_input: SaveFileAttachment): Promise<FileAttachmentRef> {
     return Promise.reject(new AttachmentError(
       'The mounted attachment provider cannot store generic files.',
@@ -156,7 +164,12 @@ export abstract class AttachmentStore extends Service {
     ))
   }
 
-  /** Read one original file and verify that bytes still match its reference. */
+  /**
+   * Read one original file and verify that bytes still match its reference.
+   * @param _ref - durable reference identifying the expected original bytes.
+   * @param _signal - optional cancellation for the provider read and verification work.
+   * @returns a rejected promise when the mounted provider does not support generic files.
+   */
   readFile(_ref: FileAttachmentRef, _signal?: AbortSignal): Promise<StoredFileAttachment> {
     return Promise.reject(new AttachmentError(
       'The mounted attachment provider cannot read generic files.',

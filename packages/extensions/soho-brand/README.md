@@ -1,49 +1,51 @@
 # @soho/dsh-brand-plugin
 
-DeepSeek Harness Web 品牌定制插件：把默认的**小鲸鱼 Logo / "DeepSeek Harness" 字标**换成**自定义图标 + 自定义品牌名**，并把品牌蓝主题换成**淡金色**。图标与文字全部可通过 profile 配置覆盖，**无需修改任何 DSH 源码**，浅色/深色主题都适配。
+English | [中文](README.zh.md)
 
-> English: A standard DSH client plugin that replaces the DeepSeek Harness Web logo/wordmark (whale → your icon, "DeepSeek" → your brand name) and retints the brand-blue theme to champagne gold. Fully configurable via the profile, works in both light and dark themes, no source modification needed.
+A DeepSeek Harness Web branding plugin. It replaces the default whale logo and DeepSeek Harness wordmark with a configurable icon and brand name, and changes the blue theme to champagne gold. The profile config overrides all values without changing DSH source, in both light and dark modes.
 
-## 效果
+> 中文：一个标准 DSH 客户端插件，将 DeepSeek Harness Web 的 Logo／字标与品牌蓝主题替换为可配置的图标、品牌名和淡金色主题。无需修改 DSH 源码，适配浅色／深色主题。
 
-| 位置 | 修改前 | 修改后 |
+## Result
+
+| Location | Before | After |
 | --- | --- | --- |
-| 左上角字标 | 小鲸鱼 + "DeepSeek" + HARNESS 徽章 | **你的图标 + 品牌名 + HARNESS 徽章** |
-| 侧栏折叠态小鲸鱼 | 小鲸鱼 | **你的图标** |
-| 新建会话页（正面）大鲸鱼 | 小鲸鱼 | **你的图标** |
-| 新建会话页标题 | "探索未至之境" | **"传承 开放 诚信 卓越"** |
-| 新建会话页徽章 | "预览版" | **隐藏**（可配置保留） |
-| 主题强调色 | 品牌蓝 | **淡金色**（侧栏选中项、气泡、按钮、状态点等） |
-| 底色 | 纯白/纯黑 | 极轻微金色暖调 |
+| Top-left wordmark | Whale + "DeepSeek" + HARNESS badge | **Your icon + brand name + HARNESS badge** |
+| Collapsed sidebar whale | Whale | **Your icon** |
+| New-session whale | Whale | **Your icon** |
+| New-session headline | "Explore the unknown" | **"Inheritance · Openness · Integrity · Excellence"** |
+| New-session badge | "Preview" | **Hidden** (configurable) |
+| Theme accent | Brand blue | **Champagne gold** for selected sidebar items, bubbles, buttons, and status dots |
+| Base colors | Pure white / black | A very slight warm gold tint |
 
-## 目录结构
+## Layout
 
 ```
 soho-brand-plugin/
-├── package.json          # npm 包清单 + dsh.client 声明（platform: web）
+├── package.json          # npm manifest + dsh.client declaration (platform: web)
 ├── README.md
 ├── assets/
-│   └── preview.png       # 内置默认图标（苏豪控股）
+│   └── preview.png       # bundled default icon (Soho Holdings)
 └── lib/
-    ├── index.js          # Host（节点）半区：无操作占位
-    ├── client.js         # 浏览器半区：品牌定制逻辑（被 /plugins/<id>/client.js 服务）
-    └── types/            # 类型声明
+    ├── index.js          # host half: no-op placeholder
+    ├── client.js         # browser half, served as /plugins/<id>/client.js
+    └── types/            # declarations
 ```
 
-## 安装（三步，给使用者）
+## Installation (three steps)
 
-### 第 1 步：让包可被 profile 解析
+### Step 1: Make the package resolvable by the profile
 
-在 `~\.dsh\profiles\<profile名>\`（例如 `C:\Users\<你>\.dsh\profiles\web\`）下，任选其一：
+In `~\.dsh\profiles\<profile>\` (for example `C:\Users\<you>\.dsh\profiles\web\`), choose one:
 
-- **方式 A（推荐，本地文件）**：编辑该目录的 `package.json`，把本包加入依赖后安装：
+- **Option A (recommended, local file):** add the package to the profile `package.json`, then install:
 
   ```json
   {
     "name": "dsh-profile-web",
     "private": true,
     "dependencies": {
-      "@soho/dsh-brand-plugin": "file:C:/绝对/路径/soho-brand-plugin"
+      "@soho/dsh-brand-plugin": "file:C:/absolute/path/soho-brand-plugin"
     },
     "dsh": { "profile": { "bundles": [ "@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app" ] } }
   }
@@ -51,16 +53,16 @@ soho-brand-plugin/
 
   ```bash
   cd ~\.dsh\profiles\web
-  npm install        # 或 pnpm install
+  npm install        # or pnpm install
   ```
 
-- **方式 B（直接放置）**：把整个 `soho-brand-plugin` 目录复制到 `~\.dsh\profiles\node_modules\@soho\dsh-brand-plugin`。
+- **Option B (direct placement):** copy `soho-brand-plugin` to `~\.dsh\profiles\node_modules\@soho\dsh-brand-plugin`.
 
-- **方式 C（发布到 npm 后）**：`npm install @soho/dsh-brand-plugin`（在 profile 目录内执行）。
+- **Option C (after publishing):** run `npm install @soho/dsh-brand-plugin` in the profile directory.
 
-### 第 2 步：在 profile 的 cordis.patch.yml 注册
+### Step 2: Register it in cordis.patch.yml
 
-编辑 `~\.dsh\profiles\<profile名>\cordis.patch.yml`，追加：
+Append to `~\.dsh\profiles\<profile>\cordis.patch.yml`:
 
 ```yaml
 - insert:
@@ -68,56 +70,69 @@ soho-brand-plugin/
       name: '@soho/dsh-brand-plugin'
 ```
 
-### 第 3 步：重启并刷新
+### Step 3: Restart and refresh
 
 ```bash
 dsh --profile web
 ```
 
-重启后打开页面（如有缓存请硬刷新 `Ctrl+Shift+R`）。
+Open the page after restart; hard-refresh with `Ctrl+Shift+R` when cached.
 
-## 配置（可选）
+## Optional configuration
 
-`icon` / `wordmark` / `harness` 三项均可覆盖，不配置则用内置默认值：
+`icon`, `wordmark`, and `harness` are overrideable; omitted values use the bundled defaults:
 
 ```yaml
 - insert:
     - id: soho-brand
       name: '@soho/dsh-brand-plugin'
       config:
-        # 你的图标：任意图片转 data URI（推荐 PNG，透明背景最佳）。
-        # 可用 PowerShell 生成： [Convert]::ToBase64String([IO.File]::ReadAllBytes('logo.png'))
+        # Your icon as a data URI; PNG with transparency is recommended.
+        # PowerShell: [Convert]::ToBase64String([IO.File]::ReadAllBytes('logo.png'))
         icon: 'data:image/png;base64,iVBORw0KGgo...'
-        wordmark: '苏豪控股'        # 左上角品牌文字，默认 '苏豪控股'
-        harness: 'HARNESS'          # 徽章文字，默认 'HARNESS'（不想显示可留空字符串）
-        headline: '传承 开放 诚信 卓越'  # 新建会话页标题，默认 '传承 开放 诚信 卓越'
-        showPreview: false          # true 则保留 '预览版' 徽章，默认 false（隐藏）
+        wordmark: 'Soho Holdings'
+        harness: 'HARNESS'
+        headline: 'Inheritance Openness Integrity Excellence'
+        showPreview: false
 ```
 
-淡金色配色是固定的品牌色（浅色/深色成对），暂不开放配置；如需调整，可改 `lib/client.js` 里的 `GOLD_TOKENS`。
+Champagne-gold tokens are fixed for the light/dark brand theme. Change `GOLD_TOKENS` in `lib/client.js` only when the palette changes.
 
-## 卸载
+## Uninstall
 
-1. 从 `cordis.patch.yml` 删除 `soho-brand` 行；
-2. 从 profile 的 `package.json` 移除依赖并 `npm uninstall @soho/dsh-brand-plugin`（方式 B 则删除目录）；
-3. 重启 `dsh --profile web`。
+1. Remove the `soho-brand` entry from `cordis.patch.yml`.
+2. Remove the dependency from the profile `package.json` and run `npm uninstall @soho/dsh-brand-plugin` (or remove the direct-placement directory).
+3. Restart `dsh --profile web`.
 
-## 工作原理
+## How it works
 
-- **主题**：客户端 `apply(ctx, config)` 通过 `ctx.theme.overrideTokens("soho-brand", GOLD_TOKENS)` 叠加 token 层——这是 DSH 主题系统官方提供的扩展点。ui-layout 的 ThemePresenter 会把合成后的 token 写成 `body` 内联样式，浅色/深色自动按配色方案取值，切换主题无需额外处理。
-- **Logo/字标**：小鲸鱼（`FishLogo`）与字标（`BrandWordmark`）编译在 Web 壳里、没有 slot 可覆盖，因此插件用 `MutationObserver` **隐藏**原 SVG 并**原位插入**定制节点（图标 `<img>` + 品牌文字 + HARNESS 徽章）。不删除 React 管理的节点，避免破坏 React 协调；组件卸载时观察器随之断开。
-- **加载机制**：包声明 `dsh.client: { platform: "web", inject: [...] }` 与 `exports["./client"]`，被 client-modules 扫描进 `window.__DSH_BOOT__`，浏览器通过 `/plugins/@soho/dsh-brand-plugin/client.js`（no-cache）拉取执行——与 DSH 官方客户端插件完全相同的标准机制。
+- **Theme:** client `apply(ctx, config)` overlays `GOLD_TOKENS` through `ctx.theme.overrideTokens("soho-brand", GOLD_TOKENS)`. ThemePresenter writes composed tokens to `body`, and both modes select the paired palette automatically.
+- **Logo/wordmark:** `FishLogo` and `BrandWordmark` have no slot, so a `MutationObserver` hides the original SVG and inserts the icon, brand name, and HARNESS badge. It preserves React-owned nodes and disconnects on unmount.
+- **Loading:** `dsh.client: { platform: "web", inject: [...] }` and `exports["./client"]` allow client-modules to include the package in `window.__DSH_BOOT__`, then the browser loads `/plugins/@soho/dsh-brand-plugin/client.js` without cache.
 
-## 环境要求
+## Requirements
 
-- DeepSeek Harness（dsh）`web` profile，版本 `0.1.0-rc.6` 系列或 `0.1.1-rc.2` 及以上。
-- 依赖官方客户端插件：`@deepseek-ai/dsh-client-runtime`、`@deepseek-ai/dsh-client-ui-theme`（web profile 默认已包含）。
+- DeepSeek Harness `web` profile, version `0.1.0-rc.6` or `0.1.1-rc.2` and later.
+- `@deepseek-ai/dsh-client-runtime` and `@deepseek-ai/dsh-client-ui-theme`, which the web profile includes.
 
-## 版本历史
+## Version history
 
-- **0.2.1**：兼容 DSH `0.1.1-rc.2` 新版客户端插件扫描器（`exports` 增加 `./package.json` 出口，否则插件会被静默跳过）。
-- **0.2.0**：初版。
+- **0.2.1:** supports the DSH `0.1.1-rc.2` client-plugin scanner by exporting `./package.json`.
+- **0.2.0:** initial release.
 
 ## License
 
 MIT
+
+## Model Experience
+
+None, as the browser branding layer changes presentation only and registers no model request context.
+
+#### KV Cache effect
+
+None; the plugin does not change any model request.
+
+## Known Limitations and Deferred Work
+
+- The logo and wordmark use DOM observation because the Web shell exposes no replacement slot.
+- Champagne-gold theme tokens are fixed in source; profile configuration does not provide arbitrary palette editing.

@@ -7,7 +7,7 @@
  * the committed artifact.
  */
 
-import { globSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, globSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve, sep } from 'node:path'
 import ts from 'typescript'
 import { LINK_MAP } from './gen-cordis-catalog.ts'
@@ -607,8 +607,10 @@ export function collectConfigCatalog(scanRoot: string = root): CatalogEntry[] {
     try {
       ctx = loadFile(resolve(scanRoot, entryRel), entryRel, cache)
     } catch {
-      // A package without src/index.ts cannot be classified — that is the
-      // violation itself; nothing else in this loop body can run without it.
+      // JavaScript-only extensions have no TypeScript Config declaration for
+      // this catalog to project. Their runtime configuration stays in their
+      // package README instead.
+      if (existsSync(resolve(scanRoot, `${dir}/src/index.js`)) || existsSync(resolve(scanRoot, `${dir}/lib/index.js`))) continue
       violations.push(`${pkg}: entry ${entryRel} is missing or unreadable.`)
       continue
     }

@@ -1,5 +1,7 @@
 # Source-Owned MaxKB Tabs Implementation Plan
 
+English | [中文](2026-08-28-source-owned-maxkb-tabs.zh.md)
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the MaxKB fixed overlay with a source-owned right-hand `Files | MaxKB` workbench that works after a clean macOS or Windows clone.

@@ -78,7 +78,11 @@ export function isImageAdmissionError(
     && IMAGE_ADMISSION_ERROR_CODE_SET.has(error.code)
 }
 
-/** Distinguish caller-correctable generic-file admission failures from storage faults. */
+/**
+ * Distinguish caller-correctable generic-file admission failures from storage faults.
+ * @param error - failure raised while validating or persisting a generic-file batch.
+ * @returns whether the caller can correct the proposed generic-file content or batch.
+ */
 export function isFileAdmissionError(
   error: unknown,
 ): error is AttachmentError & { readonly code: FileAdmissionErrorCode } {

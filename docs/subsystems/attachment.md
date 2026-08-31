@@ -1,10 +1,10 @@
-# Durable Image Attachments
+# Durable Attachments
 
 English | [中文](attachment.zh.md)
 
-The attachment seam separates binary image ownership from the session log. A producer gives validated encoded bytes to [`ctx.attachments`](#ctxattachments--attachmentstore-abstract-seam); the service publishes an immutable content-addressed reference only after the object is durable. Session events and model-visible `ImageBlock`s contain that reference and metadata, never a browser object URL, host temporary path, provider URL, or base64 payload.
+The attachment seam separates binary image and generic-file ownership from the session log. A producer gives validated bytes to [`ctx.attachments`](#ctxattachments--attachmentstore-abstract-seam); the service publishes an immutable content-addressed reference only after the object is durable. Session events and model-visible input contain that reference and metadata, never a browser object URL, host temporary path, provider URL, or base64 payload.
 
-Unsent browser drafts may stay in memory and native clients may stage them in operating-system temporary storage. Once the host accepts a user message, its images move below `<DSH_HOME>/attachments/v1` before the user event is appended. Structured model image output follows the same persist-before-event rule.
+Unsent browser drafts may stay in memory and native clients may stage them in operating-system temporary storage. Once the host accepts a user message, images move below `<DSH_HOME>/attachments/v1` and generic files below `<DSH_HOME>/attachments/v2/files` before the user event is appended. Structured model image output follows the same persist-before-event rule.
 
 Source: [`packages/attachment/attachment/src/types.ts`](../../packages/attachment/attachment/src/types.ts)
 
@@ -127,6 +127,64 @@ interface RequestImageAttachment {
 
 `saveImage()` prepares and atomically commits a provider-independent normalized attachment before returning its `ImageAttachmentRef`. `saveImages()` prepares every validated attachment once before publishing the batch, so validation rejection leaves no partial objects and publication does not repeat decoding or quality selection. `admitEncodedImages()` is the wire entry for base64 uploads and delegates count, aggregate-byte, and ordered batch admission to `saveImages()`. `readImage()` verifies a normalized attachment from an authorized session path. `readImageRequest()` derives and caches one request version under an exact route pixel and byte budget; new entries are fully decoded before publication, while cache hits use a bounded metadata probe. Callers use `Promise.all` over the singular method when they need an ordered batch. The local implementation lazily encodes preferred candidates, singleflights equal request identities, lets each waiter cancel independently, stops shared work when no waiter remains, and bounds all transforms with its instance-level limiter, which defaults to two simultaneous transformations. The service is retention-neutral: resumed and forked sessions may share objects, so reference-aware garbage collection is deferred rather than tied to one session's deletion.
 
+## Original generic files
+
+```ts type-equiv
+/** Durable, serializable reference to one immutable original file. */
+interface FileAttachmentRef {
+  /** Opaque storage identifier; never a filesystem path or bearer URL. */
+  attachmentId: AttachmentId
+  /** Caller-provided media type, or `application/octet-stream` when omitted. */
+  mediaType: string
+  /** Exact original byte length. */
+  bytes: number
+  /** Optional display name stripped of local path information. */
+  name?: string
+}
+```
+
+```ts type-equiv
+/** Request to durably store one original file. */
+interface SaveFileAttachment {
+  data: Uint8Array
+  /** Optional browser/provider media type; it is never interpreted as a path. */
+  mediaType?: string
+  /** Optional browser/provider display name; it is never interpreted as a path. */
+  name?: string
+}
+```
+
+```ts type-equiv
+/** Base64-encoded generic file upload accompanying one wire request. */
+interface EncodedFileAttachment {
+  /** Canonical base64 encoding of the original file bytes. */
+  data: string
+  /** Optional browser/provider media type; it is never interpreted as a path. */
+  mediaType?: string
+  /** Optional display name; it is never interpreted as a path. */
+  name?: string
+}
+```
+
+```ts type-equiv
+/** Stored original file bytes returned after reference and digest verification. */
+interface StoredFileAttachment {
+  ref: FileAttachmentRef
+  data: Uint8Array
+}
+```
+
+```ts type-equiv
+/** Deployment-resolved limits used by generic local-file admission. */
+interface FileAttachmentLimits {
+  maxFileBytes: number
+  maxFilesPerMessage: number
+  maxMessageFileBytes: number
+}
+```
+
+Generic files retain their original bytes. The local provider defaults an omitted media type to `application/octet-stream` and strips local path information from the display name. Its base policy admits at most 10 files and 50 MiB per message, with a 20 MiB limit for each file; provider configuration may replace those defaults. `saveFiles()` validates the complete ordered batch before saving any member, and `readFile()` verifies both content address and length. Providers that do not support generic files reject `saveFile()` and `readFile()` with `ATTACHMENT_PROJECTION_UNSUPPORTED`.
+
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
 <a id="cordis-surface"></a>
@@ -175,6 +233,28 @@ abstract saveImage(input: SaveImageAttachment): Promise<ImageAttachmentRef>
  * @throws the signal reason when aborted, or a storage error when verification fails.
  */
 abstract readImage(ref: ImageAttachmentRef, signal?: AbortSignal): Promise<StoredImageAttachment>
+
+/**
+ * Validate and durably commit an ordered generic-file batch.
+ * @param inputs - original file bytes and optional metadata, in message order.
+ * @returns durable file references in the same order as `inputs`.
+ */
+async saveFiles(inputs: readonly SaveFileAttachment[]): Promise<readonly FileAttachmentRef[]>
+
+/**
+ * Persist one generic file, retaining its original bytes.
+ * @param _input - original file bytes and optional metadata to persist.
+ * @returns a rejected promise when the mounted provider does not support generic files.
+ */
+saveFile(_input: SaveFileAttachment): Promise<FileAttachmentRef>
+
+/**
+ * Read one original file and verify that bytes still match its reference.
+ * @param _ref - durable reference identifying the expected original bytes.
+ * @param _signal - optional cancellation for the provider read and verification work.
+ * @returns a rejected promise when the mounted provider does not support generic files.
+ */
+readFile(_ref: FileAttachmentRef, _signal?: AbortSignal): Promise<StoredFileAttachment>
 
 /**
  * Generate or read one deterministic model-request version from the stored normalized image.

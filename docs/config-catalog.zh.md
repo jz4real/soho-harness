@@ -345,10 +345,16 @@ export interface Config {
   normalizedImageMaxBytes?: number
   /** Maximum simultaneous normalization or request-image transformations in this service instance. */
   imageCompressionConcurrency?: number
+  /** Maximum original bytes accepted for one submitted file. Default: 20 MiB. */
+  maxFileBytes?: number
+  /** Maximum generic-file count accepted in one submitted message. Default: 10. */
+  maxFilesPerMessage?: number
+  /** Maximum aggregate original-file bytes accepted in one submitted message. Default: 50 MiB. */
+  maxMessageFileBytes?: number
 }
 ```
 
-来源：[`packages/attachment/attachment-local/src/index.ts:51`](../packages/attachment/attachment-local/src/index.ts)
+来源：[`packages/attachment/attachment-local/src/index.ts:77`](../packages/attachment/attachment-local/src/index.ts)
 
 <a id="deepseek-aidsh-bash-local"></a>
 
@@ -2021,7 +2027,7 @@ export interface Config {
 }
 ```
 
-来源：[`packages/skill/skill/src/index.ts:279`](../packages/skill/skill/src/index.ts)
+来源：[`packages/skill/skill/src/index.ts:280`](../packages/skill/skill/src/index.ts)
 
 <a id="deepseek-aidsh-skill-filesystem"></a>
 

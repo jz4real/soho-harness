@@ -40,6 +40,9 @@ bash dsh/start-soho-web-macos.sh
 
 浏览器访问 `http://127.0.0.1:3080`。如果不需要 MaxKB，可仅执行
 `node dsh/setup-soho-web.mjs` 与 `pnpm dsh web`；右侧 MaxKB 标签页会提示服务未启动。
+使用启动器时，它会在 MaxKB 启动后的最多 30 秒内等待服务可达。若本机已有可达的
+MaxKB 但它不属于本仓库的 Compose 项目，启动器只会提示该状态，不会停止容器、迁移卷
+或改变已有服务。
 
 ## Windows 10/11
 

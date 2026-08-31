@@ -1,5 +1,7 @@
 # Source-Owned MaxKB Tabs Design
 
+English | [中文](2026-08-28-source-owned-maxkb-tabs-design.zh.md)
+
 ## Goal
 
 Keep the existing Soho Harness main UI and place MaxKB in the established right-hand `Files | MaxKB` workbench rather than opening a separate fixed overlay.

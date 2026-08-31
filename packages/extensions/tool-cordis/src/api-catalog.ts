@@ -431,6 +431,11 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [],
       },
       {
+        signature: 'readonly fileLimits: FileAttachmentLimits = Object.freeze({ maxFileBytes: 20 * 1024 * 1024, maxFilesPerMessage: 10, maxMessageFileBytes: 50 * 1024 * 1024, })',
+        description: 'Deployment-resolved generic-file policy used by authoritative validation.',
+        parameters: [],
+      },
+      {
         signature: 'abstract validateImage(input: SaveImageAttachment): Promise<void>',
         description: 'Validate one image without persisting it. Batch callers validate every member before saving any member.',
         parameters: [{ name: 'input', description: 'encoded bytes, declared media type, and optional display name.' }],
@@ -454,6 +459,24 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [{ name: 'ref', description: 'durable reference from the session log.' }, { name: 'signal', description: 'optional cancellation for backend read and verification work.' }],
         returns: 'the verified bytes and normalized attachment reference.',
         throws: ['the signal reason when aborted, or a storage error when verification fails.'],
+      },
+      {
+        signature: 'async saveFiles(inputs: readonly SaveFileAttachment[]): Promise<readonly FileAttachmentRef[]>',
+        description: 'Validate and durably commit an ordered generic-file batch.',
+        parameters: [{ name: 'inputs', description: 'original file bytes and optional metadata, in message order.' }],
+        returns: 'durable file references in the same order as `inputs`.',
+      },
+      {
+        signature: 'saveFile(_input: SaveFileAttachment): Promise<FileAttachmentRef>',
+        description: 'Persist one generic file, retaining its original bytes.',
+        parameters: [{ name: '_input', description: 'original file bytes and optional metadata to persist.' }],
+        returns: 'a rejected promise when the mounted provider does not support generic files.',
+      },
+      {
+        signature: 'readFile(_ref: FileAttachmentRef, _signal?: AbortSignal): Promise<StoredFileAttachment>',
+        description: 'Read one original file and verify that bytes still match its reference.',
+        parameters: [{ name: '_ref', description: 'durable reference identifying the expected original bytes.' }, { name: '_signal', description: 'optional cancellation for the provider read and verification work.' }],
+        returns: 'a rejected promise when the mounted provider does not support generic files.',
       },
       {
         signature: 'readImageRequest( ref: ImageAttachmentRef, policy: ImageRequestPolicy, signal?: AbortSignal, ): Promise<RequestImageAttachment>',
@@ -3115,7 +3138,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ContentBlockMap',
-    declaration: 'export interface ContentBlockMap {\n    \'text\': TextBlock;\n    \'reasoning\': ReasoningBlock;\n    \'image\': ImageBlock;\n    \'tool-call\': ToolCallBlock;\n    \'tool-result\': ToolResultBlock;\n}',
+    declaration: 'export interface ContentBlockMap {\n    \'text\': TextBlock;\n    \'reasoning\': ReasoningBlock;\n    \'image\': ImageBlock;\n    \'file\': FileBlock;\n    \'tool-call\': ToolCallBlock;\n    \'tool-result\': ToolResultBlock;\n}',
   },
   {
     name: 'ContentBlockType',
@@ -3336,6 +3359,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'EpochHeader',
     declaration: 'export interface EpochHeader {\n    config: LlmCallConfig;\n    adapterDefaults?: LlmCallConfigAdapterDefaults;\n    system?: string;\n    tools?: ToolSchema[];\n}',
+  },
+  {
+    name: 'FileAttachmentLimits',
+    declaration: 'export interface FileAttachmentLimits {\n    maxFileBytes: number;\n    maxFilesPerMessage: number;\n    maxMessageFileBytes: number;\n}',
+  },
+  {
+    name: 'FileAttachmentRef',
+    declaration: 'export interface FileAttachmentRef {\n    attachmentId: AttachmentId;\n    mediaType: string;\n    bytes: number;\n    name?: string;\n}',
+  },
+  {
+    name: 'FileBlock',
+    declaration: 'export interface FileBlock {\n    type: \'file\';\n    attachment: FileAttachmentRef;\n}',
   },
   {
     name: 'FileDiff',
@@ -4018,6 +4053,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface SandboxPolicyRequest {\n    session?: Session;\n    mode?: SandboxMode;\n}',
   },
   {
+    name: 'SaveFileAttachment',
+    declaration: 'export interface SaveFileAttachment {\n    data: Uint8Array;\n    mediaType?: string;\n    name?: string;\n}',
+  },
+  {
     name: 'SaveImageAttachment',
     declaration: 'export interface SaveImageAttachment {\n    data: Uint8Array;\n    mediaType: ImageMediaType;\n    name?: string;\n}',
   },
@@ -4452,6 +4491,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'StorageForms',
     declaration: 'export interface StorageForms {\n}',
+  },
+  {
+    name: 'StoredFileAttachment',
+    declaration: 'export interface StoredFileAttachment {\n    ref: FileAttachmentRef;\n    data: Uint8Array;\n}',
   },
   {
     name: 'StoredImageAttachment',

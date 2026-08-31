@@ -1,5 +1,7 @@
 # Local File Attachments Implementation Plan
 
+English | [中文](2026-08-26-local-file-attachments.zh.md)
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build local-first generic file attachments for the web composer with durable storage, local extraction, model context, and A-style file cards.
@@ -93,10 +95,10 @@
 - Modify: `packages/host/apiproxy/src/api/sessions.schema.ts`
 - Modify: `packages/client/runtime/src/client/sessions/session.ts`
 - Modify: `packages/client/ui-attachment/src/client/index.ts`
-- Create: `packages/client/ui-attachment/src/client/MessageFiles.tsx`
-- Create: `packages/client/ui-attachment/src/client/MessageFiles.module.css`
+- Modify: `packages/client/ui-attachment/src/client/MessageImages.tsx`
+- Modify: `packages/client/ui-attachment/src/client/ComposerAttachments.module.css`
 - Test: `packages/host/apiproxy/tests/api-proxy-attachments.spec.ts`
-- Test: `packages/client/ui-attachment/tests/message-files.client.spec.tsx`
+- Test: `packages/client/ui-attachment/tests/composer-attachments.client.spec.tsx`
 - Test: `apps/web/tests/file-attachments.e2e.ts`
 
 **Interfaces:**

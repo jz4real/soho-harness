@@ -19,7 +19,7 @@ export function resolvePanelConfig(config = {}) {
   return {
     ...DEFAULTS,
     ...config,
-    baseUrl: String(config.baseUrl ?? DEFAULTS.baseUrl).replace(/\/+$/, ''),
+    baseUrl: String(config.baseUrl ?? process.env.MAXKB_BASE_URL ?? DEFAULTS.baseUrl).replace(/\/+$/, ''),
   }
 }
 

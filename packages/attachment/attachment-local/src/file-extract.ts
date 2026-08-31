@@ -10,6 +10,7 @@ export const MAX_EXTRACTED_FILE_TEXT_CODE_POINTS = 60_000
 export const MAX_COMPRESSED_ENTRY_OUTPUT_BYTES = 4 * 1024 * 1024
 const MAX_ZIP_ENTRIES = 256
 
+/** Bounded local text-extraction result for one generic file. */
 export interface ExtractedFileText {
   text: string
   truncated: boolean
@@ -327,7 +328,11 @@ function extractLocalFileText(input: SaveFileAttachment): ExtractedFileText {
   }
 }
 
-/** Extract local text from supported files without network or model calls. */
+/**
+ * Extract bounded local text from one supported file without network or model calls.
+ * @param input - original file bytes and metadata used to select the local extractor.
+ * @returns extracted text or an unavailable status when local extraction cannot produce text.
+ */
 export function extractFileText(input: SaveFileAttachment): Promise<ExtractedFileText> {
   return Promise.resolve(extractLocalFileText(input))
 }

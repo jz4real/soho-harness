@@ -1,10 +1,10 @@
-# 持久图片附件
+# 持久附件
 
 [English](attachment.md) | 中文
 
-附件 seam 将二进制图片的所有权与会话日志分离。生产方把经过校验的编码字节交给 [`ctx.attachments`](#ctxattachments--attachmentstore-abstract-seam)；只有对象完成持久化后，该服务才会发布不可变的内容寻址引用。会话事件和模型可见的 `ImageBlock` 包含该引用及其元数据，绝不包含浏览器对象 URL、宿主临时路径、提供方 URL 或 base64 数据。
+附件 seam 将二进制图片和通用文件的所有权与会话日志分离。生产方把经过校验的字节交给 [`ctx.attachments`](#ctxattachments--attachmentstore-abstract-seam)；只有对象完成持久化后，该服务才会发布不可变的内容寻址引用。会话事件和模型可见输入包含该引用及其元数据，绝不包含浏览器对象 URL、宿主临时路径、提供方 URL 或 base64 数据。
 
-未发送的浏览器草稿可以保留在内存中，原生客户端也可以将其暂存于操作系统临时存储。宿主接受用户消息后，会先把消息中的图片移到 `<DSH_HOME>/attachments/v1` 下，再追加用户事件。结构化模型图片输出遵循同样的先持久化、后追加事件规则。
+未发送的浏览器草稿可以保留在内存中，原生客户端也可以将其暂存于操作系统临时存储。宿主接受用户消息后，会先把图片移到 `<DSH_HOME>/attachments/v1` 下、把通用文件移到 `<DSH_HOME>/attachments/v2/files` 下，再追加用户事件。结构化模型图片输出遵循同样的先持久化、后追加事件规则。
 
 来源：[`packages/attachment/attachment/src/types.ts`](../../packages/attachment/attachment/src/types.ts)
 
@@ -127,6 +127,66 @@ interface RequestImageAttachment {
 
 `saveImage()` 准备并原子提交提供方无关的规范化附件，然后直接返回 `ImageAttachmentRef`。`saveImages()` 在发布批次前为每个成员各准备一次经过验证的附件，因此校验拒绝不会留下部分对象，发布也不会重复解码或选择质量。`admitEncodedImages()` 是面向 base64 上传的 wire 入口，把张数、聚合字节和有序批量准入交给 `saveImages()`。`readImage()` 校验来自已授权会话路径的规范化附件。`readImageRequest()` 按确切路由的像素和字节预算派生并缓存请求版本；新条目在发布前完整解码，缓存命中只做有界元数据探测。调用方需要有序批次时，对单数方法使用 `Promise.all`。本地实现按需编码首选候选、合并相同请求身份的并发任务、允许每个等待方单独取消、没有等待方时停止共享任务，并通过实例级限流器限制全部变换，默认同时执行两项。该服务不规定保留策略：恢复和 fork 后的会话可能共享对象，因此基于引用的垃圾回收会延期实现，不与单个会话的删除绑定。
 
+<a id="original-generic-files"></a>
+
+## 原始通用文件
+
+```ts type-equiv
+/** Durable, serializable reference to one immutable original file. */
+interface FileAttachmentRef {
+  /** Opaque storage identifier; never a filesystem path or bearer URL. */
+  attachmentId: AttachmentId
+  /** Caller-provided media type, or `application/octet-stream` when omitted. */
+  mediaType: string
+  /** Exact original byte length. */
+  bytes: number
+  /** Optional display name stripped of local path information. */
+  name?: string
+}
+```
+
+```ts type-equiv
+/** Request to durably store one original file. */
+interface SaveFileAttachment {
+  data: Uint8Array
+  /** Optional browser/provider media type; it is never interpreted as a path. */
+  mediaType?: string
+  /** Optional browser/provider display name; it is never interpreted as a path. */
+  name?: string
+}
+```
+
+```ts type-equiv
+/** Base64-encoded generic file upload accompanying one wire request. */
+interface EncodedFileAttachment {
+  /** Canonical base64 encoding of the original file bytes. */
+  data: string
+  /** Optional browser/provider media type; it is never interpreted as a path. */
+  mediaType?: string
+  /** Optional display name; it is never interpreted as a path. */
+  name?: string
+}
+```
+
+```ts type-equiv
+/** Stored original file bytes returned after reference and digest verification. */
+interface StoredFileAttachment {
+  ref: FileAttachmentRef
+  data: Uint8Array
+}
+```
+
+```ts type-equiv
+/** Deployment-resolved limits used by generic local-file admission. */
+interface FileAttachmentLimits {
+  maxFileBytes: number
+  maxFilesPerMessage: number
+  maxMessageFileBytes: number
+}
+```
+
+通用文件会保留原始字节。本地提供方会把省略的媒体类型设为 `application/octet-stream`，并从显示名称中剥离本地路径信息。基础策略每条消息最多准入 10 个文件、总量 50 MiB，单个文件上限为 20 MiB；提供方配置可以替换这些默认值。`saveFiles()` 会在保存任何成员之前校验完整的有序批次，`readFile()` 会校验内容地址和长度。不支持通用文件的提供方会让 `saveFile()` 和 `readFile()` 以 `ATTACHMENT_PROJECTION_UNSUPPORTED` 拒绝。
+
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
 <a id="cordis-surface"></a>
@@ -175,6 +235,28 @@ abstract saveImage(input: SaveImageAttachment): Promise<ImageAttachmentRef>
  * @throws the signal reason when aborted, or a storage error when verification fails.
  */
 abstract readImage(ref: ImageAttachmentRef, signal?: AbortSignal): Promise<StoredImageAttachment>
+
+/**
+ * Validate and durably commit an ordered generic-file batch.
+ * @param inputs - original file bytes and optional metadata, in message order.
+ * @returns durable file references in the same order as `inputs`.
+ */
+async saveFiles(inputs: readonly SaveFileAttachment[]): Promise<readonly FileAttachmentRef[]>
+
+/**
+ * Persist one generic file, retaining its original bytes.
+ * @param _input - original file bytes and optional metadata to persist.
+ * @returns a rejected promise when the mounted provider does not support generic files.
+ */
+saveFile(_input: SaveFileAttachment): Promise<FileAttachmentRef>
+
+/**
+ * Read one original file and verify that bytes still match its reference.
+ * @param _ref - durable reference identifying the expected original bytes.
+ * @param _signal - optional cancellation for the provider read and verification work.
+ * @returns a rejected promise when the mounted provider does not support generic files.
+ */
+readFile(_ref: FileAttachmentRef, _signal?: AbortSignal): Promise<StoredFileAttachment>
 
 /**
  * Generate or read one deterministic model-request version from the stored normalized image.

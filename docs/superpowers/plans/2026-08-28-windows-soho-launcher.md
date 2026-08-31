@@ -1,5 +1,7 @@
 # Windows Soho Launcher Implementation Plan
 
+English | [中文](2026-08-28-windows-soho-launcher.zh.md)
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship a source-owned Windows launcher that opens Soho Harness at 3080 and optionally starts MaxKB at 8080 without embedding credentials or macOS paths.

@@ -302,7 +302,12 @@ function fileObjectPath(root: string, sha256: string): string {
   return join(root, 'files', sha256.slice(0, 2), sha256)
 }
 
-/** Persist original generic-file bytes under `attachments/v2/files`. */
+/**
+ * Persist original generic-file bytes under `attachments/v2/files`.
+ * @param root - versioned attachment storage root.
+ * @param input - original bytes and optional caller-provided metadata.
+ * @returns a durable reference to the stored original file.
+ */
 export async function saveFileAttachment(root: string, input: SaveFileAttachment): Promise<FileAttachmentRef> {
   const sha256 = digest(input.data)
   const name = displayName(input.name)
@@ -345,7 +350,13 @@ export async function saveFileAttachment(root: string, input: SaveFileAttachment
   return ref
 }
 
-/** Read original generic-file bytes and verify their content address and length. */
+/**
+ * Read original generic-file bytes and verify their content address and length.
+ * @param root - versioned attachment storage root.
+ * @param ref - expected durable reference for the original bytes.
+ * @param signal - optional cancellation for the filesystem read.
+ * @returns verified original bytes paired with their durable reference.
+ */
 export async function readFileAttachment(
   root: string,
   ref: FileAttachmentRef,

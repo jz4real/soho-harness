@@ -24,7 +24,11 @@ function english(t: TranslateNS<'conversation'>): boolean {
   return t('input.send') === 'Send message'
 }
 
-/** Resolve generic draft-file card strings for the active conversation locale. */
+/**
+ * Resolve generic draft-file card strings for the active conversation locale.
+ * @param t - conversation namespace translator.
+ * @returns translated generic draft-file card labels.
+ */
 export function fileCardLabels(t: TranslateNS<'conversation'>): FileCardLabels {
   if (english(t)) {
     return {

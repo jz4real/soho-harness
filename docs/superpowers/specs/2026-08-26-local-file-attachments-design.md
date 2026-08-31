@@ -1,5 +1,7 @@
 # Local File Attachments Design
 
+English | [中文](2026-08-26-local-file-attachments-design.zh.md)
+
 ## Goal
 
 Add a polished, local-first attachment flow to the web composer. Users can choose or drag CSV, DOCX, XLSX, PDF, TXT, Markdown, and existing image types; the session keeps an immutable local copy, shows a file card before and after sending, and supplies locally extracted content to the configured model.
